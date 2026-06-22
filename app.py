@@ -1057,15 +1057,11 @@ def home():
         huggingface_available=huggingface_available
     )
 
-# Create database
+# Create database tables if they don't exist
 with app.app_context():
-    db.drop_all()
     db.create_all()
-    print("✅ Database tables recreated successfully")
+    print("✅ Database ready!")
 
 if __name__ == "__main__":
-      port = int(os.environ.get("PORT", 8080))
-      app.run(host="0.0.0.0", port=port) 
-  if __name__ == "__main__":
-      port = int(os.environ.get("PORT", 8080))
-      app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)

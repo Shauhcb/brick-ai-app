@@ -1,6 +1,7 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 import os
 import requests
 import wikipedia
@@ -19,6 +20,16 @@ db = SQLAlchemy(app)
 # Get API keys from environment variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
+
+# Login decorator
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash('Please login to access this page.', 'error')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # Database Models
 class User(db.Model):
@@ -71,6 +82,8 @@ def init_gemini():
             print("✅ Gemini AI initialized with old client")
         except ImportError:
             print("⚠️ Gemini library not installed")
+    except Exception as e:
+        print(f"⚠️ Error initializing Gemini: {e}")
 
 def query_gemini(prompt):
     global gemini_client, USE_OLD_GEMINI
@@ -368,6 +381,28 @@ MAIN_APP_TEMPLATE = '''
             background: #e8eaff;
         }
         
+        .flash-messages {
+            margin-bottom: 20px;
+        }
+        
+        .flash {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .flash.error {
+            background: #fee;
+            color: #c00;
+            border: 1px solid #fcc;
+        }
+        
+        .flash.success {
+            background: #efe;
+            color: #080;
+            border: 1px solid #cfc;
+        }
+        
         @media (max-width: 600px) {
             .header {
                 flex-direction: column;
@@ -378,6 +413,16 @@ MAIN_APP_TEMPLATE = '''
 </head>
 <body>
     <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="flash-messages">
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+        
         <div class="header">
             <h1>👾 BRICK AI</h1>
             <div class="header-buttons">
@@ -576,10 +621,42 @@ SETTINGS_TEMPLATE = '''
             border-radius: 8px;
             margin-bottom: 20px;
         }
+        
+        .flash-messages {
+            margin-bottom: 20px;
+        }
+        
+        .flash {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .flash.error {
+            background: #fee;
+            color: #c00;
+            border: 1px solid #fcc;
+        }
+        
+        .flash.success {
+            background: #efe;
+            color: #080;
+            border: 1px solid #cfc;
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="flash-messages">
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+        
         <a href="{{ url_for('home') }}" class="back-btn">← Back to Home</a>
         
         <div class="settings-card">
@@ -823,10 +900,13 @@ REGISTER_TEMPLATE = '''
 # Routes
 @app.route('/')
 def index():
-    return redirect(url_for('home'))
+    if 'user_id' in session:
+        return redirect(url_for('home'))
+    return redirect(url_for('login'))
 
 @app.route("/login", methods=['GET', 'POST'])
 def login():
+    # If already logged in, go to home
     if 'user_id' in session:
         return redirect(url_for('home'))
     
@@ -836,10 +916,13 @@ def login():
         user = User.query.filter_by(email=email, auth_provider='local').first()
         
         if user and check_password_hash(user.password_hash, password):
+            # Set ALL session variables
             session['user_id'] = user.id
             session['username'] = user.username
-            session['theme'] = user.theme
+            session['user_email'] = user.email
+            session['theme'] = user.theme if user.theme else 'light'
             session['auth_provider'] = user.auth_provider
+            
             flash('Logged in successfully!', 'success')
             return redirect(url_for('home'))
         else:
@@ -870,8 +953,15 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         
-        flash('Account created successfully! Please login.', 'success')
-        return redirect(url_for('login'))
+        # Auto-login after registration
+        session['user_id'] = new_user.id
+        session['username'] = new_user.username
+        session['user_email'] = new_user.email
+        session['theme'] = new_user.theme
+        session['auth_provider'] = new_user.auth_provider
+        
+        flash('Account created and logged in successfully!', 'success')
+        return redirect(url_for('home'))
     
     return render_template_string(REGISTER_TEMPLATE)
 
@@ -882,20 +972,16 @@ def logout():
     return redirect(url_for('login'))
 
 @app.route("/settings")
+@login_required
 def settings():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    
     user = User.query.get(session['user_id'])
     search_count = SearchHistory.query.filter_by(user_id=user.id).count()
     
     return render_template_string(SETTINGS_TEMPLATE, user=user, search_count=search_count)
 
 @app.route('/set-theme', methods=['POST'])
+@login_required
 def set_theme():
-    if 'user_id' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
-    
     data = request.get_json()
     theme = data.get('theme', 'light')
     
@@ -907,10 +993,8 @@ def set_theme():
     return jsonify({'success': True})
 
 @app.route("/submit-feedback", methods=['POST'])
+@login_required
 def submit_feedback():
-    if 'user_id' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
-    
     data = request.get_json()
     message = data.get('message', '')
     
@@ -922,10 +1006,8 @@ def submit_feedback():
     return jsonify({'success': True})
 
 @app.route("/", methods=["GET", "POST"])
+@login_required
 def home():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    
     result = ""
     query = ""
     gemini_available = gemini_client is not None
@@ -945,14 +1027,13 @@ def home():
     )
 
 @app.route("/search", methods=["GET"])
+@login_required
 def search():
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-    
     query = request.args.get('query', '')
     mode = request.args.get('mode', 'all')
     
     if not query:
+        flash('Please enter a search query.', 'error')
         return redirect(url_for('home'))
     
     result_html = perform_multi_search(query, mode)

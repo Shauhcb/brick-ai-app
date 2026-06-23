@@ -17,8 +17,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 # ============================
 # Database configuration for free tier
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///brick_ai.db'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///brick_ai.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # Initialize Gemini AI

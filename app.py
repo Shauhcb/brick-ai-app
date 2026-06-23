@@ -19,8 +19,11 @@ app.config['SECRET_KEY'] = 'brick_ai_super_secret_key_123'
 app.config['DEBUG'] = True
 
 # Replace these with your actual API keys
-GEMINI_API_KEY = ""  # Leave empty to use Simple Bot
-HUGGINGFACE_API_KEY = ""  # Leave empty to use Simple Bot
+import os
+   
+   # Get API keys from Render environment variables
+   GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+   HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 # ============================
 
 db = SQLAlchemy(app)

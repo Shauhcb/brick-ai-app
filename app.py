@@ -1,7 +1,6 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from functools import wraps
 import os
 import requests
 import wikipedia
@@ -20,16 +19,6 @@ db = SQLAlchemy(app)
 # Get API keys from environment variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
-
-# Login decorator
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
-            flash('Please login to access this page.', 'error')
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
 
 # Database Models
 class User(db.Model):
@@ -82,8 +71,6 @@ def init_gemini():
             print("✅ Gemini AI initialized with old client")
         except ImportError:
             print("⚠️ Gemini library not installed")
-    except Exception as e:
-        print(f"⚠️ Error initializing Gemini: {e}")
 
 def query_gemini(prompt):
     global gemini_client, USE_OLD_GEMINI
@@ -119,7 +106,6 @@ def search_google(query):
 def search_bing(query):
     """Search Bing using API or web scraping"""
     try:
-        # Using Bing Search API if available
         bing_api_key = os.environ.get("BING_API_KEY", "")
         if bing_api_key:
             headers = {"Ocp-Apim-Subscription-Key": bing_api_key}
@@ -129,7 +115,6 @@ def search_bing(query):
             data = response.json()
             return [result['url'] for result in data.get('webPages', {}).get('value', [])[:3]]
         else:
-            # Fallback: return message
             return ["Bing API key not configured"]
     except Exception as e:
         print(f"Bing search error: {e}")
@@ -175,14 +160,9 @@ def summarize_content(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
-        
-        # Simple extraction (in production, use BeautifulSoup)
-        text = response.text[:2000]  # First 2000 chars
-        
-        # Ask AI to summarize
+        text = response.text[:2000]
         prompt = f"Summarize this content in 2-3 sentences:\n\n{text[:500]}"
         summary = query_gemini(prompt)
-        
         return summary if summary else text[:300] + "..."
     except Exception as e:
         print(f"Summarization error: {e}")
@@ -426,7 +406,7 @@ MAIN_APP_TEMPLATE = '''
         <div class="header">
             <h1>👾 BRICK AI</h1>
             <div class="header-buttons">
-                <a href="{{ url_for('settings') }}" class="btn-icon">⚙️ Settings</a>
+                <a href="/settings" class="btn-icon">⚙️ Settings</a>
                 <button onclick="showFeedback()" class="btn-icon">💬 Feedback</button>
             </div>
         </div>
@@ -657,7 +637,7 @@ SETTINGS_TEMPLATE = '''
             {% endif %}
         {% endwith %}
         
-        <a href="{{ url_for('home') }}" class="back-btn">← Back to Home</a>
+        <a href="/dashboard" class="back-btn">← Back to Home</a>
         
         <div class="settings-card">
             <h1>⚙️ App Settings</h1>
@@ -687,7 +667,7 @@ SETTINGS_TEMPLATE = '''
             
             <div class="setting-item">
                 <span class="setting-label">🔐 Account</span>
-                <a href="{{ url_for('logout') }}" class="logout-btn">🚪 Logout</a>
+                <a href="/logout" class="logout-btn">🚪 Logout</a>
             </div>
         </div>
     </div>
@@ -793,7 +773,7 @@ LOGIN_TEMPLATE = '''
         </form>
         
         <div class="links">
-            <a href="{{ url_for('register') }}">Create an Account</a>
+            <a href="/register">Create an Account</a>
         </div>
     </div>
 </body>
@@ -890,25 +870,31 @@ REGISTER_TEMPLATE = '''
         </form>
         
         <div class="links">
-            <a href="{{ url_for('login') }}">Already have an account? Login</a>
+            <a href="/login">Already have an account? Login</a>
         </div>
     </div>
 </body>
 </html>
 '''
 
-# Routes
+# Routes - SIMPLIFIED to avoid redirect loops
 @app.route('/')
 def index():
+    # Clear any old session issues
     if 'user_id' in session:
-        return redirect(url_for('home'))
-    return redirect(url_for('login'))
+        try:
+            user = User.query.get(session['user_id'])
+            if user:
+                return redirect('/dashboard')
+        except:
+            session.clear()
+    return redirect('/login')
 
-@app.route("/login", methods=['GET', 'POST'])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    # If already logged in, go to home
+    # If already logged in, go to dashboard
     if 'user_id' in session:
-        return redirect(url_for('home'))
+        return redirect('/dashboard')
     
     if request.method == 'POST':
         email = request.form.get('email')
@@ -916,7 +902,7 @@ def login():
         user = User.query.filter_by(email=email, auth_provider='local').first()
         
         if user and check_password_hash(user.password_hash, password):
-            # Set ALL session variables
+            # Set session
             session['user_id'] = user.id
             session['username'] = user.username
             session['user_email'] = user.email
@@ -924,7 +910,7 @@ def login():
             session['auth_provider'] = user.auth_provider
             
             flash('Logged in successfully!', 'success')
-            return redirect(url_for('home'))
+            return redirect('/dashboard')
         else:
             flash('Invalid email or password!', 'error')
     
@@ -933,7 +919,7 @@ def login():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if 'user_id' in session:
-        return redirect(url_for('home'))
+        return redirect('/dashboard')
     
     if request.method == 'POST':
         username = request.form.get('username')
@@ -953,61 +939,32 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         
-        # Auto-login after registration
+        # Auto-login
         session['user_id'] = new_user.id
         session['username'] = new_user.username
         session['user_email'] = new_user.email
         session['theme'] = new_user.theme
         session['auth_provider'] = new_user.auth_provider
         
-        flash('Account created and logged in successfully!', 'success')
-        return redirect(url_for('home'))
+        flash('Account created successfully!', 'success')
+        return redirect('/dashboard')
     
     return render_template_string(REGISTER_TEMPLATE)
 
-@app.route("/logout")
-def logout():
-    session.clear()
-    flash('You have been logged out.', 'success')
-    return redirect(url_for('login'))
-
-@app.route("/settings")
-@login_required
-def settings():
+@app.route('/dashboard')
+def dashboard():
+    # Check if user is logged in
+    if 'user_id' not in session:
+        flash('Please login first.', 'error')
+        return redirect('/login')
+    
+    # Verify user exists
     user = User.query.get(session['user_id'])
-    search_count = SearchHistory.query.filter_by(user_id=user.id).count()
+    if not user:
+        session.clear()
+        flash('User not found. Please login again.', 'error')
+        return redirect('/login')
     
-    return render_template_string(SETTINGS_TEMPLATE, user=user, search_count=search_count)
-
-@app.route('/set-theme', methods=['POST'])
-@login_required
-def set_theme():
-    data = request.get_json()
-    theme = data.get('theme', 'light')
-    
-    user = User.query.get(session['user_id'])
-    user.theme = theme
-    session['theme'] = theme
-    db.session.commit()
-    
-    return jsonify({'success': True})
-
-@app.route("/submit-feedback", methods=['POST'])
-@login_required
-def submit_feedback():
-    data = request.get_json()
-    message = data.get('message', '')
-    
-    if message:
-        feedback = Feedback(user_id=session['user_id'], message=message)
-        db.session.add(feedback)
-        db.session.commit()
-    
-    return jsonify({'success': True})
-
-@app.route("/", methods=["GET", "POST"])
-@login_required
-def home():
     result = ""
     query = ""
     gemini_available = gemini_client is not None
@@ -1026,15 +983,19 @@ def home():
         huggingface_available=huggingface_available
     )
 
-@app.route("/search", methods=["GET"])
-@login_required
+@app.route('/search', methods=['GET'])
 def search():
+    # Check if user is logged in
+    if 'user_id' not in session:
+        flash('Please login first.', 'error')
+        return redirect('/login')
+    
     query = request.args.get('query', '')
     mode = request.args.get('mode', 'all')
     
     if not query:
         flash('Please enter a search query.', 'error')
-        return redirect(url_for('home'))
+        return redirect('/dashboard')
     
     result_html = perform_multi_search(query, mode)
     
@@ -1060,6 +1021,62 @@ def search():
         gemini_available=True,
         huggingface_available=True
     )
+
+@app.route('/settings')
+def settings():
+    if 'user_id' not in session:
+        flash('Please login first.', 'error')
+        return redirect('/login')
+    
+    user = User.query.get(session['user_id'])
+    if not user:
+        session.clear()
+        return redirect('/login')
+    
+    search_count = SearchHistory.query.filter_by(user_id=user.id).count()
+    return render_template_string(SETTINGS_TEMPLATE, user=user, search_count=search_count)
+
+@app.route('/set-theme', methods=['POST'])
+def set_theme():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    data = request.get_json()
+    theme = data.get('theme', 'light')
+    
+    user = User.query.get(session['user_id'])
+    if user:
+        user.theme = theme
+        session['theme'] = theme
+        db.session.commit()
+    
+    return jsonify({'success': True})
+
+@app.route('/submit-feedback', methods=['POST'])
+def submit_feedback():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    data = request.get_json()
+    message = data.get('message', '')
+    
+    if message:
+        feedback = Feedback(user_id=session['user_id'], message=message)
+        db.session.add(feedback)
+        db.session.commit()
+    
+    return jsonify({'success': True})
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('You have been logged out.', 'success')
+    return redirect('/login')
+
+# Alias for home to dashboard
+@app.route('/home')
+def home():
+    return redirect('/dashboard')
 
 def perform_multi_search(query, mode='all'):
     html_parts = []

@@ -1,29 +1,20 @@
-import os
-from flask import Flask, request, render_template_string, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template_string, request, redirect, url_for, session, flash
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+import os  # <-- Make sure this is imported!
 import requests
-from markupsafe import escape
 import wikipedia
-from datetime import datetime
-import json
 import traceback
-import re
-import time
+import html
+
+# ... other imports ...
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.config['SECRET_KEY'] = 'brick_ai_super_secret_key_123'  # Or use: os.environ.get("SECRET_KEY", "...")
 
-# ====== KEYS HARDCODED ======
-app.config['SECRET_KEY'] = 'brick_ai_super_secret_key_123'
-app.config['DEBUG'] = True
-
-# Replace these with your actual API keys
-import os
-   
-   # Get API keys from Render environment variables
-   GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-   HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
+# Get API keys from Render environment variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 # ============================
 
 db = SQLAlchemy(app)

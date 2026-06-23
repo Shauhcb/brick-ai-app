@@ -1,13 +1,22 @@
-from flask import Flask, render_template_string, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template_string, request, redirect, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 import requests
-import wikipedia
-import traceback
-import html
 from datetime import datetime
-from googlesearch import search as google_search
+
+# Try importing optional packages with fallbacks
+try:
+    import wikipedia
+except ImportError:
+    wikipedia = None
+    print("⚠️ Wikipedia package not installed")
+
+try:
+    from googlesearch import search as google_search
+except ImportError:
+    google_search = None
+    print("⚠️ Google search package not installed")
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'brick_ai_super_secret_key_123')
@@ -20,8 +29,9 @@ db = SQLAlchemy(app)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 
-# Database Models
+# Database Models - Simplified
 class User(db.Model):
+    __tablename__ = 'user'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), unique=True, nullable=False)
     email = db.Column(db.String(150), unique=True, nullable=False)
@@ -29,10 +39,9 @@ class User(db.Model):
     auth_provider = db.Column(db.String(50), default='local')
     theme = db.Column(db.String(50), default='light')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    searches = db.relationship('SearchHistory', backref='user', lazy=True)
-    feedback = db.relationship('Feedback', backref='user', lazy=True)
 
 class SearchHistory(db.Model):
+    __tablename__ = 'search_history'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     query = db.Column(db.String(500), nullable=False)
@@ -41,36 +50,39 @@ class SearchHistory(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Feedback(db.Model):
+    __tablename__ = 'feedback'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     message = db.Column(db.Text, nullable=False)
     rating = db.Column(db.Integer)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-# Initialize Gemini AI
+# Initialize Gemini AI (optional)
 gemini_client = None
 USE_OLD_GEMINI = False
 
 def init_gemini():
     global gemini_client, USE_OLD_GEMINI
     if not GEMINI_API_KEY or GEMINI_API_KEY == "":
-        print("⚠️ No Gemini API key found - using Simple Bot only")
+        print("⚠️ No Gemini API key found")
         return
     
     try:
         from google import genai
         gemini_client = genai.Client(api_key=GEMINI_API_KEY)
         USE_OLD_GEMINI = False
-        print("✅ Gemini AI initialized with new client")
+        print("✅ Gemini AI initialized")
     except ImportError:
         try:
             import google.generativeai as genai_old
             genai_old.configure(api_key=GEMINI_API_KEY)
             gemini_client = genai_old.GenerativeModel('gemini-1.5-flash')
             USE_OLD_GEMINI = True
-            print("✅ Gemini AI initialized with old client")
+            print("✅ Gemini AI initialized (old client)")
         except ImportError:
             print("⚠️ Gemini library not installed")
+    except Exception as e:
+        print(f"⚠️ Error initializing Gemini: {e}")
 
 def query_gemini(prompt):
     global gemini_client, USE_OLD_GEMINI
@@ -91,9 +103,10 @@ def query_gemini(prompt):
         print(f"❌ Gemini error: {e}")
         return None
 
-# Multi-Source Search Functions
+# Search Functions
 def search_google(query):
-    """Search Google and return top results"""
+    if not google_search:
+        return ["Google search not available"]
     try:
         results = []
         for url in google_search(query, num_results=3):
@@ -104,7 +117,6 @@ def search_google(query):
         return []
 
 def search_bing(query):
-    """Search Bing using API or web scraping"""
     try:
         bing_api_key = os.environ.get("BING_API_KEY", "")
         if bing_api_key:
@@ -121,7 +133,8 @@ def search_bing(query):
         return []
 
 def search_wikipedia(query):
-    """Search Wikipedia and return summary"""
+    if not wikipedia:
+        return []
     try:
         results = wikipedia.search(query, results=3)
         summaries = []
@@ -142,7 +155,6 @@ def search_wikipedia(query):
         return []
 
 def smart_search(query):
-    """Use AI to provide intelligent search results"""
     prompt = f"""Provide a comprehensive answer to this query: {query}
     
     Include:
@@ -151,12 +163,10 @@ def smart_search(query):
     - Related information
     
     Keep it concise but informative."""
-    
     result = query_gemini(prompt)
     return result if result else "Smart search unavailable"
 
 def summarize_content(url):
-    """Extract and summarize content from a URL"""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
@@ -168,7 +178,7 @@ def summarize_content(url):
         print(f"Summarization error: {e}")
         return "Unable to fetch content"
 
-# Templates
+# Templates - Keep these as they are
 MAIN_APP_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -877,10 +887,9 @@ REGISTER_TEMPLATE = '''
 </html>
 '''
 
-# Routes - SIMPLIFIED to avoid redirect loops
+# Routes
 @app.route('/')
 def index():
-    # Clear any old session issues
     if 'user_id' in session:
         try:
             user = User.query.get(session['user_id'])
@@ -892,7 +901,6 @@ def index():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # If already logged in, go to dashboard
     if 'user_id' in session:
         return redirect('/dashboard')
     
@@ -902,7 +910,6 @@ def login():
         user = User.query.filter_by(email=email, auth_provider='local').first()
         
         if user and check_password_hash(user.password_hash, password):
-            # Set session
             session['user_id'] = user.id
             session['username'] = user.username
             session['user_email'] = user.email
@@ -939,7 +946,6 @@ def register():
         db.session.add(new_user)
         db.session.commit()
         
-        # Auto-login
         session['user_id'] = new_user.id
         session['username'] = new_user.username
         session['user_email'] = new_user.email
@@ -953,12 +959,10 @@ def register():
 
 @app.route('/dashboard')
 def dashboard():
-    # Check if user is logged in
     if 'user_id' not in session:
         flash('Please login first.', 'error')
         return redirect('/login')
     
-    # Verify user exists
     user = User.query.get(session['user_id'])
     if not user:
         session.clear()
@@ -985,7 +989,6 @@ def dashboard():
 
 @app.route('/search', methods=['GET'])
 def search():
-    # Check if user is logged in
     if 'user_id' not in session:
         flash('Please login first.', 'error')
         return redirect('/login')
@@ -999,7 +1002,6 @@ def search():
     
     result_html = perform_multi_search(query, mode)
     
-    # Save to history
     new_search = SearchHistory(
         user_id=session['user_id'],
         query=query,
@@ -1073,7 +1075,6 @@ def logout():
     flash('You have been logged out.', 'success')
     return redirect('/login')
 
-# Alias for home to dashboard
 @app.route('/home')
 def home():
     return redirect('/dashboard')
@@ -1084,10 +1085,9 @@ def perform_multi_search(query, mode='all'):
     if mode in ['all', 'google']:
         html_parts.append('<h2 style="color: #667eea; margin-bottom: 15px;">🔍 Multi-Source Search Results</h2>')
     
-    # Google Search
     if mode in ['all', 'google']:
         google_results = search_google(query)
-        if google_results:
+        if google_results and google_results[0] != "Google search not available":
             html_parts.append('<div class="source-section">')
             html_parts.append('<div class="source-header"><span class="source-icon">🌐</span> Google Search</div>')
             for i, url in enumerate(google_results[:3], 1):
@@ -1101,7 +1101,6 @@ def perform_multi_search(query, mode='all'):
                 ''')
             html_parts.append('</div>')
     
-    # Bing Search
     if mode in ['all', 'bing']:
         bing_results = search_bing(query)
         if bing_results:
@@ -1119,7 +1118,6 @@ def perform_multi_search(query, mode='all'):
                     ''')
             html_parts.append('</div>')
     
-    # Wikipedia
     if mode in ['all', 'wiki']:
         wiki_results = search_wikipedia(query)
         if wiki_results:
@@ -1135,7 +1133,6 @@ def perform_multi_search(query, mode='all'):
                 ''')
             html_parts.append('</div>')
     
-    # AI Smart Search
     if mode in ['all', 'ai']:
         smart_result = smart_search(query)
         if smart_result:

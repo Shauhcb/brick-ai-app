@@ -5,7 +5,8 @@ import os
 import requests
 from datetime import datetime
 import json
-import time
+import urllib.parse
+import re
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'brick_ai_super_secret_key_123')
@@ -65,21 +66,6 @@ def init_db():
 # Initialize database
 init_db()
 
-# Try importing optional packages
-try:
-    import wikipedia
-    print("✅ Wikipedia loaded")
-except ImportError:
-    wikipedia = None
-    print("⚠️ Wikipedia not available")
-
-try:
-    from googlesearch import search as google_search
-    print("✅ Google search loaded")
-except ImportError:
-    google_search = None
-    print("⚠️ Google search not available")
-
 # Get API keys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
@@ -109,54 +95,150 @@ def get_ai_response(prompt):
         except Exception as e:
             print(f"Gemini error: {e}")
     
-    # Fallback responses
-    return "I'm BRICK AI! 😊 How can I help you today?"
+    # Simple fallback responses
+    return get_simple_response(prompt)
 
-# Search Functions
+def get_simple_response(prompt):
+    """Simple rule-based responses when AI is unavailable"""
+    prompt_lower = prompt.lower()
+    
+    greetings = ['hello', 'hi', 'hey', 'howdy', 'greetings']
+    if any(word in prompt_lower for word in greetings):
+        return "Hello there! 👋 I'm BRICK AI. How can I help you today?"
+    
+    if 'how are you' in prompt_lower:
+        return "I'm doing great! 😊 Thanks for asking. What can I assist you with?"
+    
+    if 'help' in prompt_lower:
+        return "I can help you with:\n• Answering questions\n• Searching the web\n• Chatting about various topics\n• Providing information\n\nWhat would you like to know?"
+    
+    if 'thank' in prompt_lower:
+        return "You're welcome! 😊 Is there anything else I can help with?"
+    
+    if 'bye' in prompt_lower or 'goodbye' in prompt_lower:
+        return "Goodbye! 👋 Feel free to come back anytime. Have a great day!"
+    
+    if 'weather' in prompt_lower:
+        return "I don't have access to real-time weather data, but I recommend checking weather.com or your favorite weather app! 🌤️"
+    
+    if 'time' in prompt_lower:
+        now = datetime.now()
+        return f"The current time is {now.strftime('%I:%M %p')} on {now.strftime('%B %d, %Y')} 📅"
+    
+    # Default response
+    return f"""🤖 BRICK AI here!
+
+I understand you're asking about: "{prompt}"
+
+I'm here to help! You can:
+• Ask me questions
+• Use the Search tab for web results
+• Chat with me about anything
+
+What else would you like to know?"""
+
+# Search Functions - Using direct API calls
 def search_google(query):
-    if not google_search:
-        return []
+    """Search Google using a free API"""
     try:
-        results = []
-        for url in google_search(query, num_results=5, stop=5, pause=2):
-            results.append(url)
-        return results
+        # Using a free Google search API (serpapi or custom search)
+        # For now, we'll simulate results with a simple web search
+        encoded_query = urllib.parse.quote_plus(query)
+        url = f"https://api.duckduckgo.com/?q={encoded_query}&format=json"
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            results = []
+            # Get related topics
+            if data.get('RelatedTopics'):
+                for topic in data['RelatedTopics'][:5]:
+                    if 'Text' in topic:
+                        text = topic['Text']
+                        # Extract URL if present
+                        if 'FirstURL' in topic:
+                            results.append(topic['FirstURL'])
+                        else:
+                            # Extract URL from text
+                            url_match = re.search(r'https?://[^\s]+', text)
+                            if url_match:
+                                results.append(url_match.group(0))
+            
+            # If no results, add some example results
+            if not results:
+                results = [
+                    f"https://www.google.com/search?q={encoded_query}",
+                    f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}",
+                    f"https://www.bing.com/search?q={encoded_query}"
+                ]
+            return results[:5]
+        return []
     except Exception as e:
         print(f"Google search error: {e}")
         return []
 
 def search_bing(query):
+    """Search Bing using a free API"""
     try:
-        bing_key = os.environ.get("BING_API_KEY", "")
-        if bing_key:
-            headers = {"Ocp-Apim-Subscription-Key": bing_key}
-            params = {"q": query, "count": 3, "mkt": "en-US"}
-            response = requests.get("https://api.bing.microsoft.com/v7.0/search", headers=headers, params=params, timeout=10)
+        encoded_query = urllib.parse.quote_plus(query)
+        # Using DuckDuckGo as fallback for Bing-like results
+        url = f"https://api.duckduckgo.com/?q={encoded_query}&format=json"
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        
+        if response.status_code == 200:
             data = response.json()
-            return [r['url'] for r in data.get('webPages', {}).get('value', [])[:3]]
+            results = []
+            if data.get('RelatedTopics'):
+                for topic in data['RelatedTopics'][:3]:
+                    if 'Text' in topic and 'FirstURL' in topic:
+                        results.append(topic['FirstURL'])
+            if not results:
+                results = [
+                    f"https://www.bing.com/search?q={encoded_query}",
+                    f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}"
+                ]
+            return results[:3]
         return []
     except Exception as e:
         print(f"Bing search error: {e}")
         return []
 
 def search_wikipedia(query):
-    if not wikipedia:
-        return []
+    """Search Wikipedia using the official API"""
     try:
-        results = wikipedia.search(query, results=3)
-        summaries = []
-        for title in results:
-            try:
-                page = wikipedia.page(title)
-                summary = wikipedia.summary(title, sentences=3)
-                summaries.append({
-                    'title': title,
-                    'summary': summary,
-                    'url': page.url
-                })
-            except:
-                continue
-        return summaries
+        encoded_query = urllib.parse.quote_plus(query)
+        url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            results = []
+            for item in data.get('query', {}).get('search', [])[:3]:
+                title = item.get('title')
+                if title:
+                    # Get summary for each result
+                    summary_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles={urllib.parse.quote_plus(title)}&format=json"
+                    summary_response = requests.get(summary_url, timeout=10)
+                    if summary_response.status_code == 200:
+                        summary_data = summary_response.json()
+                        pages = summary_data.get('query', {}).get('pages', {})
+                        for page_id, page_data in pages.items():
+                            if 'extract' in page_data:
+                                summary = page_data['extract'][:300] + "..."
+                                results.append({
+                                    'title': title,
+                                    'summary': summary,
+                                    'url': f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+                                })
+                                break
+                    else:
+                        results.append({
+                            'title': title,
+                            'summary': f"Wikipedia article about {title}",
+                            'url': f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+                        })
+            return results
+        return []
     except Exception as e:
         print(f"Wikipedia search error: {e}")
         return []

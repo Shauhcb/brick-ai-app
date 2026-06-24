@@ -127,8 +127,12 @@ def get_ai_response(prompt):
     
     return f"🤖 BRICK AI here! I understand you're asking about: '{prompt}'. How can I help you today?"
 
-# Search Functions
+# Search Functions - Multiple methods
 def search_web(query):
+    """Search using multiple APIs with fallbacks"""
+    results = []
+    
+    # Method 1: DuckDuckGo API
     try:
         encoded_query = urllib.parse.quote_plus(query)
         url = f"https://api.duckduckgo.com/?q={encoded_query}&format=json&no_html=1&skip_disambig=1"
@@ -136,7 +140,6 @@ def search_web(query):
         
         if response.status_code == 200:
             data = response.json()
-            results = []
             
             if data.get('AbstractText'):
                 results.append({
@@ -159,23 +162,48 @@ def search_web(query):
                                 'summary': text[:200],
                                 'url': url
                             })
-            
-            if not results:
-                results = [
-                    {
-                        'title': f'Search "{query}" on Google',
-                        'summary': f'Click to search for "{query}"',
-                        'url': f'https://www.google.com/search?q={encoded_query}'
-                    }
-                ]
-            
-            return results
-        return []
     except Exception as e:
-        print(f"Search error: {e}")
-        return []
+        print(f"DuckDuckGo error: {e}")
+    
+    # Method 2: If no results, use Wikipedia API as fallback
+    if not results:
+        try:
+            wiki_results = search_wikipedia(query)
+            if wiki_results:
+                for item in wiki_results[:3]:
+                    results.append({
+                        'title': item['title'],
+                        'summary': item['summary'],
+                        'url': item['url']
+                    })
+        except Exception as e:
+            print(f"Wikipedia fallback error: {e}")
+    
+    # Method 3: If still no results, return example search links
+    if not results:
+        encoded_query = urllib.parse.quote_plus(query)
+        results = [
+            {
+                'title': f'🔍 Search "{query}" on Google',
+                'summary': f'Click to search for "{query}" on Google',
+                'url': f'https://www.google.com/search?q={encoded_query}'
+            },
+            {
+                'title': f'📚 Search "{query}" on Wikipedia',
+                'summary': f'Click to search for "{query}" on Wikipedia',
+                'url': f'https://en.wikipedia.org/wiki/{query.replace(" ", "_")}'
+            },
+            {
+                'title': f'🔎 Search "{query}" on Bing',
+                'summary': f'Click to search for "{query}" on Bing',
+                'url': f'https://www.bing.com/search?q={encoded_query}'
+            }
+        ]
+    
+    return results
 
 def search_wikipedia(query):
+    """Search Wikipedia"""
     try:
         encoded_query = urllib.parse.quote_plus(query)
         url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
@@ -215,7 +243,7 @@ def search_wikipedia(query):
         print(f"Wikipedia error: {e}")
         return []
 
-# Templates - Login & Register (unchanged)
+# Templates (Login & Register unchanged)
 LOGIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -398,7 +426,7 @@ REGISTER_TEMPLATE = '''
 </html>
 '''
 
-# New Chat Interface Template
+# Main Chat Template
 MAIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -695,7 +723,6 @@ MAIN_TEMPLATE = '''
         </div>
         
         <div class="main-content">
-            <!-- Sidebar -->
             <div class="sidebar">
                 <div class="sidebar-header">
                     <h3>💬 Chats</h3>
@@ -712,7 +739,6 @@ MAIN_TEMPLATE = '''
                 </div>
             </div>
             
-            <!-- Chat Area -->
             <div class="chat-area">
                 <div class="chat-header">
                     <h3 id="chatTitle">💬 BRICK AI Assistant</h3>
@@ -738,7 +764,6 @@ MAIN_TEMPLATE = '''
     <script>
         let currentChat = 'main';
         
-        // Load chat history
         function loadChatHistory() {
             fetch('/get-chat-history')
                 .then(response => response.json())
@@ -750,7 +775,6 @@ MAIN_TEMPLATE = '''
                             addMessage('user', msg.message);
                             addMessage('ai', msg.response);
                         });
-                        updateChatList(data.history);
                     } else {
                         container.innerHTML = `
                             <div class="empty-state">
@@ -769,10 +793,6 @@ MAIN_TEMPLATE = '''
                         </div>
                     `;
                 });
-        }
-        
-        function updateChatList(history) {
-            // Could add multiple chat sessions here
         }
         
         function loadChat(chatId) {
@@ -797,7 +817,6 @@ MAIN_TEMPLATE = '''
             const message = input.value.trim();
             if (!message) return;
             
-            // Remove empty state
             document.querySelector('.empty-state')?.remove();
             
             addMessage('user', message);
@@ -1104,15 +1123,18 @@ SEARCH_TEMPLATE = '''
         </div>
         
         <div class="search-box">
-            <input type="text" class="search-input" id="searchQuery" placeholder="What would you like to search?" value="{{ query if query else '' }}">
-            <div class="search-mode">
-                <button class="mode-btn active" onclick="setMode('all')">🔍 All</button>
-                <button class="mode-btn" onclick="setMode('google')">🌐 Google</button>
-                <button class="mode-btn" onclick="setMode('bing')">🔎 Bing</button>
-                <button class="mode-btn" onclick="setMode('wiki')">📚 Wiki</button>
-                <button class="mode-btn" onclick="setMode('ai')">🤖 AI</button>
-            </div>
-            <button class="search-btn" id="searchBtn" onclick="performSearch()">🚀 Search Now</button>
+            <form method="POST" action="/search">
+                <input type="text" class="search-input" id="searchQuery" name="query" placeholder="What would you like to search?" value="{{ query if query else '' }}">
+                <div class="search-mode">
+                    <button type="button" class="mode-btn active" onclick="setMode('all')">🔍 All</button>
+                    <button type="button" class="mode-btn" onclick="setMode('google')">🌐 Google</button>
+                    <button type="button" class="mode-btn" onclick="setMode('bing')">🔎 Bing</button>
+                    <button type="button" class="mode-btn" onclick="setMode('wiki')">📚 Wiki</button>
+                    <button type="button" class="mode-btn" onclick="setMode('ai')">🤖 AI</button>
+                </div>
+                <input type="hidden" name="mode" id="modeInput" value="all">
+                <button type="submit" class="search-btn" id="searchBtn">🚀 Search Now</button>
+            </form>
         </div>
         
         <div class="loading-container" id="searchLoading">
@@ -1143,38 +1165,19 @@ SEARCH_TEMPLATE = '''
             currentMode = mode;
             document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
             event.target.classList.add('active');
-        }
-        
-        function performSearch() {
-            const query = document.getElementById('searchQuery').value;
-            if (!query.trim()) { alert('Please enter a search query'); return; }
-            
-            const loading = document.getElementById('searchLoading');
-            const searchBtn = document.getElementById('searchBtn');
-            loading.classList.add('active');
-            searchBtn.disabled = true;
-            searchBtn.textContent = '⏳ Searching...';
-            
-            window.location.href = '/search?query=' + encodeURIComponent(query) + '&mode=' + currentMode;
+            document.getElementById('modeInput').value = mode;
         }
         
         function loadSearch(query) {
             document.getElementById('searchQuery').value = query;
-            performSearch();
+            document.querySelector('form').submit();
         }
         
         document.getElementById('searchQuery').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-        
-        window.onload = function() {
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.get('loading') === 'true') {
-                document.getElementById('searchLoading').classList.add('active');
-                document.getElementById('searchBtn').disabled = true;
-                document.getElementById('searchBtn').textContent = '⏳ Searching...';
+            if (e.key === 'Enter') {
+                document.querySelector('form').submit();
             }
-        };
+        });
     </script>
 </body>
 </html>
@@ -1538,17 +1541,13 @@ def search_page():
         flash('Please login first.', 'error')
         return redirect('/login')
     
-    query = request.args.get('query', '')
-    mode = request.args.get('mode', 'all')
-    loading = request.args.get('loading', 'false')
-    
     conn = get_db()
     c = conn.cursor()
     c.execute('SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
     history = c.fetchall()
     conn.close()
     
-    return render_template_string(SEARCH_TEMPLATE, result='', query=query, history=history, loading=loading)
+    return render_template_string(SEARCH_TEMPLATE, result='', query='', history=history)
 
 @app.route('/search', methods=['POST'])
 def search():
@@ -1565,7 +1564,7 @@ def search():
     
     html_parts = []
     
-    # Web Search
+    # Web Search (Google/Bing/All)
     if mode in ['all', 'google', 'bing']:
         results = search_web(query)
         if results:
@@ -1592,7 +1591,7 @@ def search():
             html_parts.append(f'''
             <div class="source-section">
                 <div class="source-header"><span class="source-icon">{icon}</span> {source_name}</div>
-                <div class="result-item">No results found for "{query}".</div>
+                <div class="result-item">No results found for "{query}". Try a different search.</div>
             </div>
             ''')
     
@@ -1645,7 +1644,13 @@ def search():
     conn.commit()
     conn.close()
     
-    return redirect(f'/search?query={query}&loading=false')
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
+    history = c.fetchall()
+    conn.close()
+    
+    return render_template_string(SEARCH_TEMPLATE, result=result_html, query=query, history=history)
 
 @app.route('/chat', methods=['POST'])
 def chat():

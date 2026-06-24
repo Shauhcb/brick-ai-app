@@ -125,15 +125,10 @@ def get_ai_response(prompt):
     if 'bye' in prompt_lower:
         return "Goodbye! 👋 Have a great day!"
     
-    return f"""🤖 BRICK AI here!
-
-I understand you're asking about: "{prompt}"
-
-How can I help you today?"""
+    return f"🤖 BRICK AI here! I understand you're asking about: '{prompt}'. How can I help you today?"
 
 # Search Functions
 def search_web(query):
-    """Search using DuckDuckGo API"""
     try:
         encoded_query = urllib.parse.quote_plus(query)
         url = f"https://api.duckduckgo.com/?q={encoded_query}&format=json&no_html=1&skip_disambig=1"
@@ -143,7 +138,6 @@ def search_web(query):
             data = response.json()
             results = []
             
-            # Get Abstract
             if data.get('AbstractText'):
                 results.append({
                     'title': data.get('Heading', query),
@@ -151,7 +145,6 @@ def search_web(query):
                     'url': data.get('AbstractURL', '')
                 })
             
-            # Get Related Topics
             if data.get('RelatedTopics'):
                 for topic in data['RelatedTopics'][:5]:
                     if 'Text' in topic:
@@ -167,7 +160,6 @@ def search_web(query):
                                 'url': url
                             })
             
-            # If no results, return search links
             if not results:
                 results = [
                     {
@@ -184,7 +176,6 @@ def search_web(query):
         return []
 
 def search_wikipedia(query):
-    """Search Wikipedia"""
     try:
         encoded_query = urllib.parse.quote_plus(query)
         url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
@@ -224,7 +215,7 @@ def search_wikipedia(query):
         print(f"Wikipedia error: {e}")
         return []
 
-# Templates
+# Templates - Login & Register (unchanged)
 LOGIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -407,6 +398,7 @@ REGISTER_TEMPLATE = '''
 </html>
 '''
 
+# New Chat Interface Template
 MAIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -414,6 +406,495 @@ MAIN_TEMPLATE = '''
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BRICK AI 👾</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.95);
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+        }
+        .header {
+            background: {% if session.get('theme') == 'dark' %}#1a1a2e{% else %}#667eea{% endif %};
+            padding: 15px 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .header h1 {
+            font-size: 24px;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .header-buttons { display: flex; gap: 10px; }
+        .btn-icon {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.3s;
+        }
+        .btn-icon:hover { background: rgba(255,255,255,0.3); transform: translateY(-2px); }
+        
+        .main-content {
+            display: flex;
+            flex: 1;
+            height: calc(90vh - 70px);
+        }
+        .sidebar {
+            width: 280px;
+            background: {% if session.get('theme') == 'dark' %}#16213e{% else %}#f8f9ff{% endif %};
+            border-right: 1px solid #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-header {
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .sidebar-header h3 {
+            color: #667eea;
+            font-size: 16px;
+        }
+        .sidebar-search {
+            padding: 10px 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .sidebar-search input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+        }
+        .sidebar-search input:focus { outline: none; border-color: #667eea; }
+        .chat-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        .chat-item {
+            padding: 12px 15px;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: white;
+            border: 1px solid #e8eaff;
+        }
+        .chat-item:hover {
+            background: #e8eaff;
+            transform: translateX(5px);
+        }
+        .chat-item.active {
+            background: #667eea;
+            border-color: #667eea;
+        }
+        .chat-item.active h4 { color: white; }
+        .chat-item.active p { color: rgba(255,255,255,0.8); }
+        .chat-item h4 {
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        .chat-item p {
+            font-size: 12px;
+            color: #999;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .chat-item .time {
+            font-size: 10px;
+            color: #bbb;
+            float: right;
+        }
+        
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: {% if session.get('theme') == 'dark' %}#1a1a2e{% else %}#ffffff{% endif %};
+        }
+        .chat-header {
+            padding: 15px 20px;
+            background: {% if session.get('theme') == 'dark' %}#16213e{% else %}#f8f9ff{% endif %};
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .chat-header h3 {
+            color: #667eea;
+            font-size: 18px;
+        }
+        .chat-header .clear-chat {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 6px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .chat-header .clear-chat:hover { background: #c0392b; }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: {% if session.get('theme') == 'dark' %}#0f3460{% else %}#f8f9ff{% endif %};
+            min-height: 400px;
+        }
+        .chat-message {
+            margin-bottom: 15px;
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 75%;
+            animation: fadeIn 0.3s;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .chat-message.user {
+            background: #667eea;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 4px;
+        }
+        .chat-message.ai {
+            background: white;
+            color: #333;
+            margin-right: auto;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .chat-message .time {
+            font-size: 10px;
+            opacity: 0.7;
+            margin-top: 5px;
+            display: block;
+        }
+        .chat-message.user .time { color: rgba(255,255,255,0.8); }
+        .chat-message.ai .time { color: #999; }
+        
+        .chat-input-area {
+            padding: 15px 20px;
+            background: {% if session.get('theme') == 'dark' %}#16213e{% else %}#f8f9ff{% endif %};
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 14px;
+            background: white;
+        }
+        .chat-input:focus { outline: none; border-color: #667eea; }
+        .chat-send-btn {
+            padding: 12px 25px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .chat-send-btn:hover { background: #5a6fd6; transform: scale(1.02); }
+        .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .chat-typing {
+            display: none;
+            padding: 12px 20px;
+            color: #667eea;
+            font-style: italic;
+            font-size: 14px;
+        }
+        .chat-typing.active { display: block; }
+        .chat-typing .blinking-emoji-small {
+            display: inline-block;
+            animation: blink 0.6s infinite;
+            font-size: 18px;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.2; transform: scale(0.8); }
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        .empty-state .emoji {
+            font-size: 48px;
+            display: block;
+            margin-bottom: 15px;
+        }
+        
+        .tab-navigation {
+            display: none;
+        }
+        
+        @media (max-width: 768px) {
+            .sidebar {
+                width: 200px;
+            }
+            .container { height: 95vh; }
+            .chat-message { max-width: 90%; }
+            .header h1 { font-size: 18px; }
+        }
+        @media (max-width: 600px) {
+            .main-content { flex-direction: column; }
+            .sidebar {
+                width: 100%;
+                height: 200px;
+                border-right: none;
+                border-bottom: 1px solid #e0e0e0;
+            }
+            .chat-area { height: calc(100% - 200px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>👾 BRICK AI</h1>
+            <div class="header-buttons">
+                <a href="/search" class="btn-icon">🔍 Search</a>
+                <a href="/settings" class="btn-icon">⚙️ Settings</a>
+                <button onclick="showFeedback()" class="btn-icon">💬 Feedback</button>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <h3>💬 Chats</h3>
+                </div>
+                <div class="sidebar-search">
+                    <input type="text" id="searchChats" placeholder="Search Chats..." onkeyup="filterChats()">
+                </div>
+                <div class="chat-list" id="chatList">
+                    <div class="chat-item active" onclick="loadChat('main')">
+                        <h4>BRICK AI Assistant</h4>
+                        <p>Your AI companion</p>
+                        <span class="time">Now</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Chat Area -->
+            <div class="chat-area">
+                <div class="chat-header">
+                    <h3 id="chatTitle">💬 BRICK AI Assistant</h3>
+                    <button class="clear-chat" onclick="clearChat()">🗑️ Clear Chat</button>
+                </div>
+                <div class="chat-messages" id="chatMessages">
+                    <div class="empty-state">
+                        <span class="emoji">👾</span>
+                        <p>Start a conversation with BRICK AI</p>
+                    </div>
+                </div>
+                <div class="chat-typing" id="chatTyping">
+                    <span class="blinking-emoji-small">👾</span> BRICK AI is thinking...
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" class="chat-input" id="chatInput" placeholder="Type your message..." onkeypress="if(event.key==='Enter') sendMessage()">
+                    <button class="chat-send-btn" id="chatSendBtn" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentChat = 'main';
+        
+        // Load chat history
+        function loadChatHistory() {
+            fetch('/get-chat-history')
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById('chatMessages');
+                    container.innerHTML = '';
+                    if (data.history && data.history.length > 0) {
+                        data.history.forEach(msg => {
+                            addMessage('user', msg.message);
+                            addMessage('ai', msg.response);
+                        });
+                        updateChatList(data.history);
+                    } else {
+                        container.innerHTML = `
+                            <div class="empty-state">
+                                <span class="emoji">👾</span>
+                                <p>Start a conversation with BRICK AI</p>
+                            </div>
+                        `;
+                    }
+                })
+                .catch(() => {
+                    const container = document.getElementById('chatMessages');
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <span class="emoji">👾</span>
+                            <p>Start a conversation with BRICK AI</p>
+                        </div>
+                    `;
+                });
+        }
+        
+        function updateChatList(history) {
+            // Could add multiple chat sessions here
+        }
+        
+        function loadChat(chatId) {
+            currentChat = chatId;
+            document.querySelectorAll('.chat-item').forEach(el => el.classList.remove('active'));
+            event.target.closest('.chat-item').classList.add('active');
+            loadChatHistory();
+        }
+        
+        function filterChats() {
+            const input = document.getElementById('searchChats');
+            const filter = input.value.toLowerCase();
+            const items = document.querySelectorAll('.chat-item');
+            items.forEach(item => {
+                const text = item.textContent.toLowerCase();
+                item.style.display = text.includes(filter) ? '' : 'none';
+            });
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            // Remove empty state
+            document.querySelector('.empty-state')?.remove();
+            
+            addMessage('user', message);
+            input.value = '';
+            input.disabled = true;
+            document.getElementById('chatSendBtn').disabled = true;
+            document.getElementById('chatTyping').classList.add('active');
+            
+            fetch('/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: message})
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('chatTyping').classList.remove('active');
+                input.disabled = false;
+                document.getElementById('chatSendBtn').disabled = false;
+                input.focus();
+                if (data.response) {
+                    addMessage('ai', data.response);
+                } else {
+                    addMessage('ai', 'Sorry, I had trouble responding. Please try again.');
+                }
+            })
+            .catch(error => {
+                document.getElementById('chatTyping').classList.remove('active');
+                input.disabled = false;
+                document.getElementById('chatSendBtn').disabled = false;
+                input.focus();
+                addMessage('ai', 'Sorry, there was an error. Please try again.');
+            });
+        }
+        
+        function addMessage(type, text) {
+            const container = document.getElementById('chatMessages');
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement('div');
+            div.className = 'chat-message ' + type;
+            if (type === 'ai') {
+                div.innerHTML = '<strong>👾 BRICK AI</strong><p>' + text.replace(/\\n/g, '<br>') + '</p><span class="time">' + time + '</span>';
+            } else {
+                div.innerHTML = '<p>' + text.replace(/\\n/g, '<br>') + '</p><span class="time">' + time + '</span>';
+            }
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        function clearChat() {
+            if (confirm('Are you sure you want to clear the chat history?')) {
+                fetch('/clear-chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                }).then(() => {
+                    document.getElementById('chatMessages').innerHTML = `
+                        <div class="empty-state">
+                            <span class="emoji">👾</span>
+                            <p>Chat cleared! Start a new conversation.</p>
+                        </div>
+                    `;
+                });
+            }
+        }
+        
+        function showFeedback() {
+            const feedback = prompt('We value your feedback! Please share your thoughts:');
+            if (feedback) {
+                fetch('/submit-feedback', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: feedback})
+                }).then(response => {
+                    if (response.ok) alert('Thank you for your feedback!');
+                });
+            }
+        }
+        
+        document.getElementById('chatInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') sendMessage();
+        });
+        
+        window.onload = function() {
+            loadChatHistory();
+        };
+    </script>
+</body>
+</html>
+'''
+
+# Search Page Template
+SEARCH_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search - BRICK AI 👾</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -434,7 +915,7 @@ MAIN_TEMPLATE = '''
             flex-wrap: wrap;
             box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
-        .header h1 { font-size: 32px; color: #667eea; }
+        .header h1 { font-size: 28px; color: #667eea; }
         .header-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
         .btn-icon {
             background: #667eea;
@@ -443,30 +924,12 @@ MAIN_TEMPLATE = '''
             padding: 10px 18px;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 15px;
+            font-size: 14px;
             text-decoration: none;
             display: inline-block;
             transition: all 0.3s;
         }
         .btn-icon:hover { background: #5a6fd6; transform: translateY(-2px); }
-        .tab-navigation { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab-btn {
-            padding: 12px 25px;
-            background: rgba(255,255,255,0.9);
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: bold;
-            color: #667eea;
-            transition: all 0.3s;
-            flex: 1;
-        }
-        .tab-btn:hover { background: white; transform: translateY(-2px); }
-        .tab-btn.active { background: #667eea; color: white; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        
         .search-box {
             background: rgba(255,255,255,0.95);
             padding: 25px;
@@ -533,113 +996,15 @@ MAIN_TEMPLATE = '''
             animation: blink 0.8s infinite;
         }
         @keyframes blink {
-            0%, 100% { opacity: 1; transform: scale(1) rotate(0deg); }
-            25% { transform: scale(1.1) rotate(-5deg); }
-            50% { opacity: 0.2; transform: scale(0.8) rotate(0deg); }
-            75% { transform: scale(1.1) rotate(5deg); }
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.2; transform: scale(0.8); }
         }
         .loading-text {
             font-size: 22px;
             color: #667eea;
             margin-top: 15px;
             font-weight: bold;
-            animation: pulse 1.5s ease-in-out infinite;
         }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        .chat-container {
-            background: rgba(255,255,255,0.95);
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            height: 600px;
-            display: flex;
-            flex-direction: column;
-        }
-        .chat-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        .chat-header h3 { color: #667eea; }
-        .chat-header .clear-chat {
-            background: #e74c3c;
-            color: white;
-            border: none;
-            padding: 5px 15px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-        .chat-header .clear-chat:hover { background: #c0392b; }
-        .chat-messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 10px;
-            margin-bottom: 15px;
-            background: #f8f9ff;
-            border-radius: 10px;
-            min-height: 400px;
-            max-height: 450px;
-        }
-        .chat-message {
-            margin-bottom: 15px;
-            padding: 12px 16px;
-            border-radius: 12px;
-            max-width: 80%;
-            animation: fadeIn 0.3s;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .chat-message.user { background: #667eea; color: white; margin-left: auto; border-bottom-right-radius: 4px; }
-        .chat-message.ai { background: white; color: #333; margin-right: auto; border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-        .chat-message .time { font-size: 11px; opacity: 0.7; margin-top: 5px; display: block; }
-        .chat-message.user .time { color: rgba(255,255,255,0.8); }
-        .chat-message.ai .time { color: #999; }
-        .chat-input-area { display: flex; gap: 10px; }
-        .chat-input {
-            flex: 1;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 15px;
-        }
-        .chat-input:focus { outline: none; border-color: #667eea; }
-        .chat-send-btn {
-            padding: 12px 25px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 15px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .chat-send-btn:hover { background: #5a6fd6; transform: scale(1.02); }
-        .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .chat-typing {
-            display: none;
-            padding: 12px;
-            color: #667eea;
-            font-style: italic;
-            font-size: 16px;
-        }
-        .chat-typing.active { display: block; }
-        .chat-typing .blinking-emoji-small {
-            display: inline-block;
-            animation: blink 0.6s infinite;
-            font-size: 22px;
-        }
-        
         .results-container {
             background: rgba(255,255,255,0.95);
             padding: 25px;
@@ -653,6 +1018,10 @@ MAIN_TEMPLATE = '''
             background: #f8f9ff;
             border-radius: 8px;
             animation: fadeIn 0.5s;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         .source-header {
             display: flex;
@@ -698,17 +1067,25 @@ MAIN_TEMPLATE = '''
             transition: all 0.3s;
         }
         .history-item:hover { background: #e8eaff; transform: translateX(5px); }
+        .back-btn {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .back-btn:hover { text-decoration: underline; }
         @media (max-width: 600px) {
             .header { flex-direction: column; gap: 15px; }
             .header-buttons { width: 100%; justify-content: center; }
             .mode-btn { font-size: 11px; padding: 6px 10px; }
-            .tab-btn { font-size: 14px; padding: 10px 15px; }
-            .chat-container { height: 500px; }
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <a href="/dashboard" class="back-btn">← Back to Chats</a>
+        
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
             <div class="flash-messages">
@@ -720,107 +1097,47 @@ MAIN_TEMPLATE = '''
         {% endwith %}
         
         <div class="header">
-            <h1>👾 BRICK AI</h1>
+            <h1>🔍 BRICK AI Search</h1>
             <div class="header-buttons">
                 <a href="/settings" class="btn-icon">⚙️ Settings</a>
-                <button onclick="showFeedback()" class="btn-icon">💬 Feedback</button>
             </div>
         </div>
         
-        <div class="tab-navigation">
-            <button class="tab-btn active" onclick="switchTab('search')">🔍 Search</button>
-            <button class="tab-btn" onclick="switchTab('chat')">💬 Chat</button>
+        <div class="search-box">
+            <input type="text" class="search-input" id="searchQuery" placeholder="What would you like to search?" value="{{ query if query else '' }}">
+            <div class="search-mode">
+                <button class="mode-btn active" onclick="setMode('all')">🔍 All</button>
+                <button class="mode-btn" onclick="setMode('google')">🌐 Google</button>
+                <button class="mode-btn" onclick="setMode('bing')">🔎 Bing</button>
+                <button class="mode-btn" onclick="setMode('wiki')">📚 Wiki</button>
+                <button class="mode-btn" onclick="setMode('ai')">🤖 AI</button>
+            </div>
+            <button class="search-btn" id="searchBtn" onclick="performSearch()">🚀 Search Now</button>
         </div>
         
-        <div id="searchTab" class="tab-content active">
-            <div class="search-box">
-                <input type="text" class="search-input" id="searchQuery" placeholder="What would you like to search?" value="{{ query if query else '' }}">
-                <div class="search-mode">
-                    <button class="mode-btn active" onclick="setMode('all')">🔍 All</button>
-                    <button class="mode-btn" onclick="setMode('google')">🌐 Google</button>
-                    <button class="mode-btn" onclick="setMode('bing')">🔎 Bing</button>
-                    <button class="mode-btn" onclick="setMode('wiki')">📚 Wiki</button>
-                    <button class="mode-btn" onclick="setMode('ai')">🤖 AI</button>
-                </div>
-                <button class="search-btn" id="searchBtn" onclick="performSearch()">🚀 Search Now</button>
-            </div>
-            
-            <div class="loading-container" id="searchLoading">
-                <div class="blinking-emoji">👾</div>
-                <div class="loading-text">BRICK AI is thinking...</div>
-            </div>
-            
-            {% if result %}
-            <div class="results-container">{{ result|safe }}</div>
-            {% endif %}
-            
-            {% if history %}
-            <div class="history-section">
-                <h2 style="color: #667eea;">📜 Recent Searches</h2>
-                {% for item in history %}
-                <div class="history-item" onclick="loadSearch('{{ item.query }}')">
-                    <strong>{{ item.query }}</strong><br><small>{{ item.timestamp }}</small>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
+        <div class="loading-container" id="searchLoading">
+            <div class="blinking-emoji">👾</div>
+            <div class="loading-text">BRICK AI is thinking...</div>
         </div>
         
-        <div id="chatTab" class="tab-content">
-            <div class="chat-container">
-                <div class="chat-header">
-                    <h3>💬 Chat with BRICK AI</h3>
-                    <button class="clear-chat" onclick="clearChat()">🗑️ Clear Chat</button>
-                </div>
-                <div class="chat-messages" id="chatMessages">
-                    <!-- Messages will be loaded here -->
-                </div>
-                <div class="chat-typing" id="chatTyping">
-                    <span class="blinking-emoji-small">👾</span> BRICK AI is thinking...
-                </div>
-                <div class="chat-input-area">
-                    <input type="text" class="chat-input" id="chatInput" placeholder="Type your message..." onkeypress="if(event.key==='Enter') sendMessage()">
-                    <button class="chat-send-btn" id="chatSendBtn" onclick="sendMessage()">Send</button>
-                </div>
+        {% if result %}
+        <div class="results-container">{{ result|safe }}</div>
+        {% endif %}
+        
+        {% if history %}
+        <div class="history-section">
+            <h2 style="color: #667eea;">📜 Recent Searches</h2>
+            {% for item in history %}
+            <div class="history-item" onclick="loadSearch('{{ item.query }}')">
+                <strong>{{ item.query }}</strong><br><small>{{ item.timestamp }}</small>
             </div>
+            {% endfor %}
         </div>
+        {% endif %}
     </div>
     
     <script>
         let currentMode = 'all';
-        
-        // Load chat history
-        function loadChatHistory() {
-            fetch('/get-chat-history')
-                .then(response => response.json())
-                .then(data => {
-                    const container = document.getElementById('chatMessages');
-                    container.innerHTML = '';
-                    if (data.history && data.history.length > 0) {
-                        data.history.forEach(msg => {
-                            addMessage('user', msg.message);
-                            addMessage('ai', msg.response);
-                        });
-                    } else {
-                        addMessage('ai', 'Hello! I\'m BRICK AI, your friendly assistant. Ask me anything! 😊');
-                    }
-                })
-                .catch(() => {
-                    addMessage('ai', 'Hello! I\'m BRICK AI, your friendly assistant. Ask me anything! 😊');
-                });
-        }
-        
-        function switchTab(tab) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-            if (tab === 'search') {
-                document.getElementById('searchTab').classList.add('active');
-            } else {
-                document.getElementById('chatTab').classList.add('active');
-                loadChatHistory();
-            }
-            event.target.classList.add('active');
-        }
         
         function setMode(mode) {
             currentMode = mode;
@@ -846,91 +1163,11 @@ MAIN_TEMPLATE = '''
             performSearch();
         }
         
-        function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            if (!message) return;
-            
-            addMessage('user', message);
-            input.value = '';
-            input.disabled = true;
-            document.getElementById('chatSendBtn').disabled = true;
-            document.getElementById('chatTyping').classList.add('active');
-            
-            fetch('/chat', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({message: message})
-            })
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('chatTyping').classList.remove('active');
-                input.disabled = false;
-                document.getElementById('chatSendBtn').disabled = false;
-                input.focus();
-                if (data.response) {
-                    addMessage('ai', data.response);
-                } else {
-                    addMessage('ai', 'Sorry, I had trouble responding. Please try again.');
-                }
-            })
-            .catch(error => {
-                document.getElementById('chatTyping').classList.remove('active');
-                input.disabled = false;
-                document.getElementById('chatSendBtn').disabled = false;
-                input.focus();
-                addMessage('ai', 'Sorry, there was an error. Please try again.');
-            });
-        }
-        
-        function addMessage(type, text) {
-            const container = document.getElementById('chatMessages');
-            const time = new Date().toLocaleTimeString();
-            const div = document.createElement('div');
-            div.className = 'chat-message ' + type;
-            if (type === 'ai') {
-                div.innerHTML = '<strong>👾 BRICK AI</strong><p>' + text.replace(/\\n/g, '<br>') + '</p><span class="time">' + time + '</span>';
-            } else {
-                div.innerHTML = '<p>' + text.replace(/\\n/g, '<br>') + '</p><span class="time">' + time + '</span>';
-            }
-            container.appendChild(div);
-            container.scrollTop = container.scrollHeight;
-        }
-        
-        function clearChat() {
-            if (confirm('Are you sure you want to clear the chat history?')) {
-                fetch('/clear-chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'}
-                }).then(() => {
-                    document.getElementById('chatMessages').innerHTML = '';
-                    addMessage('ai', 'Chat cleared! Start a new conversation. 😊');
-                });
-            }
-        }
-        
-        function showFeedback() {
-            const feedback = prompt('We value your feedback! Please share your thoughts:');
-            if (feedback) {
-                fetch('/submit-feedback', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message: feedback})
-                }).then(response => {
-                    if (response.ok) alert('Thank you for your feedback!');
-                });
-            }
-        }
-        
-        document.getElementById('chatInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') sendMessage();
-        });
         document.getElementById('searchQuery').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') performSearch();
         });
         
         window.onload = function() {
-            loadChatHistory();
             const urlParams = new URLSearchParams(window.location.search);
             if (urlParams.get('loading') === 'true') {
                 document.getElementById('searchLoading').classList.add('active');
@@ -1102,7 +1339,7 @@ SETTINGS_TEMPLATE = '''
             {% endif %}
         {% endwith %}
         
-        <a href="/dashboard" class="back-btn">← Back to Home</a>
+        <a href="/dashboard" class="back-btn">← Back to Chats</a>
         <div class="settings-card">
             <h1>⚙️ BRICK AI Settings</h1>
             
@@ -1292,28 +1529,43 @@ def dashboard():
         flash('User not found. Please login again.', 'error')
         return redirect('/login')
     
-    c.execute('SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
-    history = c.fetchall()
     conn.close()
-    
-    return render_template_string(MAIN_TEMPLATE, result='', query='', history=history)
+    return render_template_string(MAIN_TEMPLATE)
 
 @app.route('/search', methods=['GET'])
-def search():
+def search_page():
     if 'user_id' not in session:
         flash('Please login first.', 'error')
         return redirect('/login')
     
     query = request.args.get('query', '')
     mode = request.args.get('mode', 'all')
+    loading = request.args.get('loading', 'false')
+    
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
+    history = c.fetchall()
+    conn.close()
+    
+    return render_template_string(SEARCH_TEMPLATE, result='', query=query, history=history, loading=loading)
+
+@app.route('/search', methods=['POST'])
+def search():
+    if 'user_id' not in session:
+        flash('Please login first.', 'error')
+        return redirect('/login')
+    
+    query = request.form.get('query', '')
+    mode = request.form.get('mode', 'all')
     
     if not query:
         flash('Please enter a search query.', 'error')
-        return redirect('/dashboard')
+        return redirect('/search')
     
     html_parts = []
     
-    # Web Search (Google/Bing/All)
+    # Web Search
     if mode in ['all', 'google', 'bing']:
         results = search_web(query)
         if results:
@@ -1340,7 +1592,7 @@ def search():
             html_parts.append(f'''
             <div class="source-section">
                 <div class="source-header"><span class="source-icon">{icon}</span> {source_name}</div>
-                <div class="result-item">No results found for "{query}". Try a different search.</div>
+                <div class="result-item">No results found for "{query}".</div>
             </div>
             ''')
     
@@ -1393,13 +1645,7 @@ def search():
     conn.commit()
     conn.close()
     
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
-    history = c.fetchall()
-    conn.close()
-    
-    return render_template_string(MAIN_TEMPLATE, result=result_html, query=query, history=history)
+    return redirect(f'/search?query={query}&loading=false')
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -1513,7 +1759,6 @@ def update_setting():
     value = data.get('value')
     
     session[setting] = value
-    
     return jsonify({'success': True})
 
 @app.route('/clear-history', methods=['POST'])

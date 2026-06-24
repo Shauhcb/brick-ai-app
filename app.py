@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 import urllib.parse
 import html
+import time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'brick_ai_super_secret_key_123')
@@ -80,32 +81,123 @@ except ImportError:
     google_search = None
     print("⚠️ Google search not available")
 
-# Gemini AI (optional)
+# Get API keys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
+
+# AI Clients
 gemini_client = None
+huggingface_client = None
 
-def init_gemini():
-    global gemini_client
-    if not GEMINI_API_KEY:
-        return
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        gemini_client = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ Gemini AI initialized")
-    except:
-        print("⚠️ Gemini not available")
+def init_ai_clients():
+    global gemini_client, huggingface_client
+    
+    # Initialize Gemini
+    if GEMINI_API_KEY:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            gemini_client = genai.GenerativeModel('gemini-1.5-flash')
+            print("✅ Gemini AI initialized")
+        except Exception as e:
+            print(f"⚠️ Gemini init error: {e}")
+    
+    # Initialize HuggingFace (optional)
+    if HUGGINGFACE_API_KEY:
+        huggingface_client = HUGGINGFACE_API_KEY
+        print("✅ HuggingFace API configured")
 
-init_gemini()
+init_ai_clients()
 
-def query_gemini(prompt):
-    if not gemini_client:
-        return None
-    try:
-        response = gemini_client.generate_content(prompt)
-        return response.text
-    except:
-        return None
+def query_ai(prompt, max_retries=2):
+    """Query AI with fallback: Gemini -> HuggingFace -> Simple Bot"""
+    
+    # Try Gemini first
+    if gemini_client:
+        try:
+            response = gemini_client.generate_content(prompt)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            print(f"Gemini error: {e}")
+    
+    # Try HuggingFace as fallback
+    if huggingface_client:
+        try:
+            API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
+            headers = {"Authorization": f"Bearer {huggingface_client}"}
+            payload = {"inputs": prompt, "parameters": {"max_new_tokens": 500}}
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                if data and isinstance(data, list) and len(data) > 0:
+                    return data[0].get('generated_text', '').replace(prompt, '').strip()
+        except Exception as e:
+            print(f"HuggingFace error: {e}")
+    
+    # Simple Bot as final fallback
+    return generate_simple_response(prompt)
+
+def generate_simple_response(prompt):
+    """Simple rule-based responses when AI is unavailable"""
+    prompt_lower = prompt.lower()
+    
+    greetings = ['hello', 'hi', 'hey', 'greetings', 'howdy']
+    if any(word in prompt_lower for word in greetings):
+        return "Hello! 👋 I'm BRICK AI. How can I help you today?"
+    
+    if 'how are you' in prompt_lower:
+        return "I'm doing great! Thanks for asking. How can I assist you?"
+    
+    if 'help' in prompt_lower:
+        return "I can help you with:\n• Answering questions\n• Providing information\n• Chatting about various topics\n• Search assistance\n\nWhat would you like to know?"
+    
+    if 'weather' in prompt_lower:
+        return "I don't have access to real-time weather data, but you can check weather websites for accurate forecasts! 🌤️"
+    
+    if 'time' in prompt_lower or 'date' in prompt_lower:
+        from datetime import datetime
+        now = datetime.now()
+        return f"The current time is {now.strftime('%I:%M %p')} on {now.strftime('%B %d, %Y')} 📅"
+    
+    if 'thank' in prompt_lower:
+        return "You're welcome! 😊 Is there anything else I can help you with?"
+    
+    if 'bye' in prompt_lower or 'goodbye' in prompt_lower:
+        return "Goodbye! 👋 Feel free to come back anytime. Have a great day!"
+    
+    # Default response
+    return f"""🤖 BRICK AI here! 
+
+I understand you're asking about: "{prompt}"
+
+Since I'm currently in simple mode, here's what I can tell you:
+• Try searching for this using the Search tab
+• I can chat with you about general topics
+• Ask me anything else!
+
+Is there something specific you'd like to know?"""
+
+def smart_search(query):
+    """AI-powered search with fallback"""
+    prompt = f"""Provide a comprehensive answer to: {query}
+    
+    Format:
+    1. Brief overview
+    2. Key points
+    3. Summary"""
+    
+    result = query_ai(prompt)
+    return result if result else "AI search is currently unavailable."
+
+def chat_with_ai(message):
+    """Chat with AI with fallback"""
+    prompt = f"""You are BRICK AI, a friendly assistant. Respond to: {message}
+    
+    Be conversational and helpful. Keep responses natural and engaging."""
+    
+    result = query_ai(prompt)
+    return result if result else "I'm having trouble responding. Could you try again?"
 
 # Search Functions
 def search_google(query):
@@ -157,40 +249,6 @@ def search_wikipedia(query):
         print(f"Wikipedia search error: {e}")
         return []
 
-def smart_search(query):
-    if not gemini_client:
-        return "AI search is not configured. Please add GEMINI_API_KEY to enable AI features."
-    
-    prompt = f"""Provide a comprehensive and well-structured answer to this query: {query}
-    
-    Format your response with:
-    1. A clear overview
-    2. Key points or facts
-    3. Relevant examples if applicable
-    4. A conclusion or summary
-    
-    Keep it informative but concise (2-3 paragraphs)."""
-    
-    result = query_gemini(prompt)
-    return result if result else "AI search is currently unavailable. Please try again later."
-
-def chat_with_ai(message):
-    """Chat with AI for the interactive chat feature"""
-    if not gemini_client:
-        return "🤖 AI chat is not configured. Please add GEMINI_API_KEY to enable chat features."
-    
-    prompt = f"""You are BRICK AI, a friendly and helpful AI assistant. Respond to this user message: {message}
-    
-    Guidelines:
-    - Be conversational and friendly
-    - Provide helpful, accurate information
-    - Keep responses concise but informative
-    - If you don't know something, be honest about it
-    """
-    
-    result = query_gemini(prompt)
-    return result if result else "🤖 I'm having trouble responding right now. Please try again!"
-
 def summarize_content(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -216,7 +274,7 @@ MAIN_TEMPLATE = '''
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
+            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
             min-height: 100vh;
             padding: 20px;
         }
@@ -233,23 +291,24 @@ MAIN_TEMPLATE = '''
             box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
         .header h1 { 
-            font-size: 28px;
+            font-size: 32px;
             display: flex;
             align-items: center;
             gap: 10px;
         }
-        /* Glowing Green Title */
+        /* Glowing Green Title - FIXED */
         .glow-title {
-            color: #00ff41;
+            color: #00ff41 !important;
             text-shadow: 
                 0 0 5px #00ff41,
                 0 0 10px #00ff41,
                 0 0 20px #00ff41,
                 0 0 40px #00ff41,
                 0 0 80px #00ff41,
-                0 0 120px #00ff41;
+                0 0 120px #00ff41 !important;
             animation: glowPulse 2s ease-in-out infinite;
             font-weight: bold;
+            font-size: 32px;
         }
         @keyframes glowPulse {
             0%, 100% {
@@ -270,7 +329,7 @@ MAIN_TEMPLATE = '''
                     0 0 200px #00ff41;
             }
         }
-        .header h1 span { font-size: 32px; }
+        .header h1 span { font-size: 36px; }
         .header-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
         .btn-icon {
             background: #667eea;
@@ -286,7 +345,6 @@ MAIN_TEMPLATE = '''
         }
         .btn-icon:hover { background: #5a6fd6; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
         
-        /* Tab Navigation */
         .tab-navigation {
             display: flex;
             gap: 10px;
@@ -309,12 +367,8 @@ MAIN_TEMPLATE = '''
         .tab-btn:hover { background: white; transform: translateY(-2px); }
         .tab-btn.active { background: #667eea; color: white; box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
         
-        .tab-content {
-            display: none;
-        }
-        .tab-content.active {
-            display: block;
-        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
         
         .search-box {
             background: rgba(255,255,255,0.95);
@@ -332,9 +386,8 @@ MAIN_TEMPLATE = '''
             margin-bottom: 15px;
             transition: border-color 0.3s;
         }
-        .search-input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        .search-input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
         
-        /* Search Mode - All buttons in one row */
         .search-mode {
             display: flex;
             gap: 8px;
@@ -371,7 +424,6 @@ MAIN_TEMPLATE = '''
             font-weight: bold;
             cursor: pointer;
             transition: all 0.3s;
-            position: relative;
             box-shadow: 0 0 20px rgba(0,255,65,0.3);
         }
         .search-btn:hover { 
@@ -380,11 +432,11 @@ MAIN_TEMPLATE = '''
         }
         .search-btn:disabled { opacity: 0.7; cursor: not-allowed; transform: none; }
         
-        /* Loading Animation */
+        /* Loading Animation - BLINKING 👾 */
         .loading-container {
             display: none;
             text-align: center;
-            padding: 30px;
+            padding: 40px;
             background: rgba(255,255,255,0.95);
             border-radius: 15px;
             margin: 20px 0;
@@ -395,20 +447,27 @@ MAIN_TEMPLATE = '''
             animation: fadeIn 0.3s;
         }
         .blinking-emoji {
-            font-size: 48px;
+            font-size: 64px;
             display: inline-block;
-            animation: blink 1s infinite;
-        }
-        .loading-text {
-            font-size: 20px;
-            color: #00ff41;
-            margin-top: 10px;
-            font-weight: bold;
-            text-shadow: 0 0 10px rgba(0,255,65,0.3);
+            animation: blink 0.8s infinite;
         }
         @keyframes blink {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.2; transform: scale(0.8); }
+            0%, 100% { opacity: 1; transform: scale(1) rotate(0deg); }
+            25% { transform: scale(1.1) rotate(-5deg); }
+            50% { opacity: 0.3; transform: scale(0.8) rotate(0deg); }
+            75% { transform: scale(1.1) rotate(5deg); }
+        }
+        .loading-text {
+            font-size: 22px;
+            color: #00ff41;
+            margin-top: 15px;
+            font-weight: bold;
+            text-shadow: 0 0 20px rgba(0,255,65,0.5);
+        }
+        .loading-subtext {
+            color: #666;
+            margin-top: 5px;
+            font-size: 14px;
         }
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(20px); }
@@ -474,7 +533,7 @@ MAIN_TEMPLATE = '''
             font-size: 15px;
             transition: border-color 0.3s;
         }
-        .chat-input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        .chat-input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
         .chat-send-btn {
             padding: 12px 25px;
             background: linear-gradient(135deg, #00ff41, #00cc33);
@@ -492,19 +551,21 @@ MAIN_TEMPLATE = '''
             box-shadow: 0 0 40px rgba(0,255,65,0.5);
         }
         .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        
+        /* Chat Typing - BLINKING 👾 */
         .chat-typing {
             display: none;
-            padding: 10px;
+            padding: 12px;
             color: #00ff41;
             font-style: italic;
             font-size: 16px;
-            text-shadow: 0 0 10px rgba(0,255,65,0.3);
+            text-shadow: 0 0 20px rgba(0,255,65,0.3);
         }
         .chat-typing.active { display: block; }
         .chat-typing .blinking-emoji-small {
             display: inline-block;
-            animation: blink 0.8s infinite;
-            font-size: 20px;
+            animation: blink 0.6s infinite;
+            font-size: 22px;
         }
         
         .results-container {
@@ -589,6 +650,8 @@ MAIN_TEMPLATE = '''
             .tab-btn { min-width: 80px; font-size: 14px; padding: 10px 15px; }
             .chat-container { height: 500px; }
             .chat-message { max-width: 90%; }
+            .glow-title { font-size: 24px; }
+            .header h1 span { font-size: 28px; }
         }
     </style>
 </head>
@@ -632,10 +695,11 @@ MAIN_TEMPLATE = '''
                 <button class="search-btn" id="searchBtn" onclick="performSearch()">🚀 Search Now</button>
             </div>
             
-            <!-- Loading Indicator for Search -->
+            <!-- Loading Indicator with Blinking 👾 -->
             <div class="loading-container" id="searchLoading">
                 <div class="blinking-emoji">👾</div>
                 <div class="loading-text">BRICK AI is thinking...</div>
+                <div class="loading-subtext">Searching across multiple sources</div>
             </div>
             
             {% if result %}
@@ -705,7 +769,7 @@ MAIN_TEMPLATE = '''
             const query = document.getElementById('searchQuery').value;
             if (!query.trim()) { alert('Please enter a search query'); return; }
             
-            // Show loading
+            // Show loading with blinking 👾
             const loading = document.getElementById('searchLoading');
             const results = document.querySelector('.results-container');
             const searchBtn = document.getElementById('searchBtn');
@@ -718,7 +782,7 @@ MAIN_TEMPLATE = '''
             // Redirect with loading state
             setTimeout(() => {
                 window.location.href = '/search?query=' + encodeURIComponent(query) + '&mode=' + currentMode + '&loading=true';
-            }, 500);
+            }, 600);
         }
         
         function loadSearch(query) {
@@ -738,10 +802,9 @@ MAIN_TEMPLATE = '''
             input.disabled = true;
             document.getElementById('chatSendBtn').disabled = true;
             
-            // Show typing indicator with blinking emoji
+            // Show typing indicator with blinking 👾
             document.getElementById('chatTyping').classList.add('active');
             
-            // Scroll to bottom
             const container = document.getElementById('chatMessages');
             container.scrollTop = container.scrollHeight;
             
@@ -838,7 +901,7 @@ SETTINGS_TEMPLATE = '''
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
+            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
             min-height: 100vh;
             padding: 20px;
         }
@@ -858,12 +921,12 @@ SETTINGS_TEMPLATE = '''
             gap: 10px;
         }
         .glow-title {
-            color: #00ff41;
+            color: #00ff41 !important;
             text-shadow: 
                 0 0 5px #00ff41,
                 0 0 10px #00ff41,
                 0 0 20px #00ff41,
-                0 0 40px #00ff41;
+                0 0 40px #00ff41 !important;
             animation: glowPulse 2s ease-in-out infinite;
         }
         @keyframes glowPulse {
@@ -892,7 +955,7 @@ SETTINGS_TEMPLATE = '''
             font-size: 16px;
             transition: all 0.3s;
         }
-        .theme-btn.active { border-color: #00ff41; background: #f0fff4; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        .theme-btn.active { border-color: #00ff41; background: #f0fff4; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
         .theme-btn:hover { border-color: #00ff41; transform: translateY(-2px); }
         .logout-btn {
             width: 100%;
@@ -1019,12 +1082,12 @@ LOGIN_TEMPLATE = '''
             gap: 10px;
         }
         .glow-title {
-            color: #00ff41;
+            color: #00ff41 !important;
             text-shadow: 
                 0 0 5px #00ff41,
                 0 0 10px #00ff41,
                 0 0 20px #00ff41,
-                0 0 40px #00ff41;
+                0 0 40px #00ff41 !important;
             animation: glowPulse 2s ease-in-out infinite;
         }
         @keyframes glowPulse {
@@ -1046,7 +1109,7 @@ LOGIN_TEMPLATE = '''
             font-size: 16px;
             transition: border-color 0.3s;
         }
-        input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
         .btn {
             width: 100%;
             padding: 14px;
@@ -1135,12 +1198,12 @@ REGISTER_TEMPLATE = '''
             gap: 10px;
         }
         .glow-title {
-            color: #00ff41;
+            color: #00ff41 !important;
             text-shadow: 
                 0 0 5px #00ff41,
                 0 0 10px #00ff41,
                 0 0 20px #00ff41,
-                0 0 40px #00ff41;
+                0 0 40px #00ff41 !important;
             animation: glowPulse 2s ease-in-out infinite;
         }
         @keyframes glowPulse {
@@ -1162,7 +1225,7 @@ REGISTER_TEMPLATE = '''
             font-size: 16px;
             transition: border-color 0.3s;
         }
-        input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
         .btn {
             width: 100%;
             padding: 14px;
@@ -1348,20 +1411,8 @@ def search():
                     </div>
                     ''')
                 html_parts.append('</div>')
-            else:
-                html_parts.append(f'''
-                <div class="source-section">
-                    <div class="source-header"><span class="source-icon">🌐</span> Google Search</div>
-                    <div class="result-item">No Google results found for "{query}". Try a different search.</div>
-                </div>
-                ''')
         except Exception as e:
-            html_parts.append(f'''
-            <div class="source-section">
-                <div class="source-header"><span class="source-icon">🌐</span> Google Search</div>
-                <div class="result-item">Google search error: {str(e)}</div>
-            </div>
-            ''')
+            pass
     
     # Bing Search
     if mode in ['all', 'bing']:
@@ -1398,22 +1449,10 @@ def search():
                     </div>
                     ''')
                 html_parts.append('</div>')
-            else:
-                html_parts.append(f'''
-                <div class="source-section">
-                    <div class="source-header"><span class="source-icon">📚</span> Wikipedia</div>
-                    <div class="result-item">No Wikipedia articles found for "{query}". Try a different search.</div>
-                </div>
-                ''')
         except Exception as e:
-            html_parts.append(f'''
-            <div class="source-section">
-                <div class="source-header"><span class="source-icon">📚</span> Wikipedia</div>
-                <div class="result-item">Wikipedia search error: {str(e)}</div>
-            </div>
-            ''')
+            pass
     
-    # AI Search
+    # AI Search - Now with fallback
     if mode in ['all', 'ai']:
         try:
             ai_result = smart_search(query)
@@ -1423,12 +1462,7 @@ def search():
                 html_parts.append(f'<div class="result-item"><div class="result-summary">{ai_result}</div></div>')
                 html_parts.append('</div>')
         except Exception as e:
-            html_parts.append(f'''
-            <div class="source-section">
-                <div class="source-header"><span class="source-icon">🤖</span> AI Smart Summary</div>
-                <div class="result-item">AI search error: {str(e)}</div>
-            </div>
-            ''')
+            pass
     
     result_html = ''.join(html_parts) if html_parts else f'<p>No results found for "{query}". Try a different search term.</p>'
     

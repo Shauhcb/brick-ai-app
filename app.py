@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 import urllib.parse
 import re
+import time
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'brick_ai_super_secret_key_123')
@@ -22,6 +23,7 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
     
+    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -31,6 +33,7 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
     
+    # Search history table
     c.execute('''CREATE TABLE IF NOT EXISTS search_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -41,6 +44,7 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
     
+    # Feedback table
     c.execute('''CREATE TABLE IF NOT EXISTS feedback (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -50,12 +54,23 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
     
+    # Chat messages table
     c.execute('''CREATE TABLE IF NOT EXISTS chat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         message TEXT NOT NULL,
         response TEXT NOT NULL,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )''')
+    
+    # Settings table
+    c.execute('''CREATE TABLE IF NOT EXISTS user_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL UNIQUE,
+        auto_save_chats BOOLEAN DEFAULT 1,
+        show_timestamps BOOLEAN DEFAULT 1,
+        search_suggestions BOOLEAN DEFAULT 1,
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
     
@@ -102,7 +117,7 @@ def get_simple_response(prompt):
     """Simple rule-based responses when AI is unavailable"""
     prompt_lower = prompt.lower()
     
-    greetings = ['hello', 'hi', 'hey', 'howdy', 'greetings']
+    greetings = ['hello', 'hi', 'hey', 'howdy', 'greetings', 'sup']
     if any(word in prompt_lower for word in greetings):
         return "Hello there! 👋 I'm BRICK AI. How can I help you today?"
     
@@ -125,7 +140,17 @@ def get_simple_response(prompt):
         now = datetime.now()
         return f"The current time is {now.strftime('%I:%M %p')} on {now.strftime('%B %d, %Y')} 📅"
     
-    # Default response
+    if 'summer' in prompt_lower:
+        now = datetime.now()
+        month = now.month
+        if month in [6, 7, 8]:
+            return "Yes! It is currently summer in the Northern Hemisphere. ☀️ Enjoy the warm weather!"
+        elif month in [12, 1, 2]:
+            return "No, it's currently winter in the Northern Hemisphere. ❄️ It's summer in the Southern Hemisphere though!"
+        else:
+            return "It's currently spring or autumn. Summer is coming soon! 🌸"
+    
+    # Default response - more helpful
     return f"""🤖 BRICK AI here!
 
 I understand you're asking about: "{prompt}"
@@ -137,106 +162,102 @@ I'm here to help! You can:
 
 What else would you like to know?"""
 
-# Search Functions - Using direct API calls
-def search_google(query):
-    """Search Google using a free API"""
+# Search Functions - Using DuckDuckGo API for real results
+def search_duckduckgo(query):
+    """Search using DuckDuckGo API"""
     try:
-        # Using a free Google search API (serpapi or custom search)
-        # For now, we'll simulate results with a simple web search
         encoded_query = urllib.parse.quote_plus(query)
-        url = f"https://api.duckduckgo.com/?q={encoded_query}&format=json"
+        url = f"https://api.duckduckgo.com/?q={encoded_query}&format=json&no_html=1&skip_disambig=1"
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
             results = []
-            # Get related topics
+            
+            # Get Abstract text
+            if data.get('AbstractText'):
+                results.append({
+                    'title': data.get('Heading', query),
+                    'summary': data.get('AbstractText', ''),
+                    'url': data.get('AbstractURL', '')
+                })
+            
+            # Get Related Topics
             if data.get('RelatedTopics'):
                 for topic in data['RelatedTopics'][:5]:
                     if 'Text' in topic:
                         text = topic['Text']
-                        # Extract URL if present
-                        if 'FirstURL' in topic:
-                            results.append(topic['FirstURL'])
-                        else:
-                            # Extract URL from text
-                            url_match = re.search(r'https?://[^\s]+', text)
-                            if url_match:
-                                results.append(url_match.group(0))
+                        # Clean up text
+                        text = re.sub(r'<[^>]+>', '', text)
+                        # Extract URL
+                        url_match = re.search(r'https?://[^\s]+', text)
+                        url = url_match.group(0) if url_match else ''
+                        # Clean text from URL
+                        text = re.sub(r'https?://[^\s]+', '', text).strip()
+                        if text and len(text) > 10:
+                            results.append({
+                                'title': text[:50] + '...' if len(text) > 50 else text,
+                                'summary': text[:200],
+                                'url': url
+                            })
             
-            # If no results, add some example results
+            # If no results, return some example links
             if not results:
                 results = [
-                    f"https://www.google.com/search?q={encoded_query}",
-                    f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}",
-                    f"https://www.bing.com/search?q={encoded_query}"
+                    {
+                        'title': f'Search "{query}" on Google',
+                        'summary': f'Click to search for "{query}" on Google',
+                        'url': f'https://www.google.com/search?q={encoded_query}'
+                    },
+                    {
+                        'title': f'Search "{query}" on Wikipedia',
+                        'summary': f'Click to search for "{query}" on Wikipedia',
+                        'url': f'https://en.wikipedia.org/wiki/{query.replace(" ", "_")}'
+                    }
                 ]
-            return results[:5]
+            
+            return results
         return []
     except Exception as e:
-        print(f"Google search error: {e}")
-        return []
-
-def search_bing(query):
-    """Search Bing using a free API"""
-    try:
-        encoded_query = urllib.parse.quote_plus(query)
-        # Using DuckDuckGo as fallback for Bing-like results
-        url = f"https://api.duckduckgo.com/?q={encoded_query}&format=json"
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            results = []
-            if data.get('RelatedTopics'):
-                for topic in data['RelatedTopics'][:3]:
-                    if 'Text' in topic and 'FirstURL' in topic:
-                        results.append(topic['FirstURL'])
-            if not results:
-                results = [
-                    f"https://www.bing.com/search?q={encoded_query}",
-                    f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}"
-                ]
-            return results[:3]
-        return []
-    except Exception as e:
-        print(f"Bing search error: {e}")
+        print(f"Search error: {e}")
         return []
 
 def search_wikipedia(query):
     """Search Wikipedia using the official API"""
     try:
         encoded_query = urllib.parse.quote_plus(query)
-        url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json"
+        url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
         response = requests.get(url, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
             results = []
+            
             for item in data.get('query', {}).get('search', [])[:3]:
                 title = item.get('title')
                 if title:
-                    # Get summary for each result
+                    # Get summary
                     summary_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles={urllib.parse.quote_plus(title)}&format=json"
                     summary_response = requests.get(summary_url, timeout=10)
+                    summary = ''
                     if summary_response.status_code == 200:
                         summary_data = summary_response.json()
                         pages = summary_data.get('query', {}).get('pages', {})
                         for page_id, page_data in pages.items():
                             if 'extract' in page_data:
-                                summary = page_data['extract'][:300] + "..."
-                                results.append({
-                                    'title': title,
-                                    'summary': summary,
-                                    'url': f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
-                                })
+                                extract = page_data['extract']
+                                summary = extract[:300] + '...' if len(extract) > 300 else extract
                                 break
-                    else:
-                        results.append({
-                            'title': title,
-                            'summary': f"Wikipedia article about {title}",
-                            'url': f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
-                        })
+                    
+                    if not summary:
+                        summary = f"Wikipedia article about {title}"
+                    
+                    results.append({
+                        'title': title,
+                        'summary': summary,
+                        'url': f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+                    })
+            
             return results
         return []
     except Exception as e:
@@ -485,6 +506,7 @@ MAIN_TEMPLATE = '''
         .tab-btn.active { background: #667eea; color: white; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        
         .search-box {
             background: rgba(255,255,255,0.95);
             padding: 25px;
@@ -560,6 +582,7 @@ MAIN_TEMPLATE = '''
             margin-top: 15px;
             font-weight: bold;
         }
+        
         .chat-container {
             background: rgba(255,255,255,0.95);
             border-radius: 15px;
@@ -569,6 +592,27 @@ MAIN_TEMPLATE = '''
             display: flex;
             flex-direction: column;
         }
+        .chat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .chat-header h3 {
+            color: #667eea;
+        }
+        .chat-header .clear-chat {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 5px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .chat-header .clear-chat:hover { background: #c0392b; }
         .chat-messages {
             flex: 1;
             overflow-y: auto;
@@ -576,6 +620,7 @@ MAIN_TEMPLATE = '''
             margin-bottom: 15px;
             background: #f8f9ff;
             border-radius: 10px;
+            min-height: 400px;
         }
         .chat-message {
             margin-bottom: 15px;
@@ -586,6 +631,8 @@ MAIN_TEMPLATE = '''
         .chat-message.user { background: #667eea; color: white; margin-left: auto; }
         .chat-message.ai { background: white; color: #333; margin-right: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
         .chat-message .time { font-size: 11px; opacity: 0.7; margin-top: 5px; display: block; }
+        .chat-message.user .time { color: rgba(255,255,255,0.8); }
+        .chat-message.ai .time { color: #999; }
         .chat-input-area { display: flex; gap: 10px; }
         .chat-input {
             flex: 1;
@@ -621,6 +668,7 @@ MAIN_TEMPLATE = '''
             animation: blink 0.6s infinite;
             font-size: 22px;
         }
+        
         .results-container {
             background: rgba(255,255,255,0.95);
             padding: 25px;
@@ -746,12 +794,12 @@ MAIN_TEMPLATE = '''
         
         <div id="chatTab" class="tab-content">
             <div class="chat-container">
+                <div class="chat-header">
+                    <h3>💬 Chat with BRICK AI</h3>
+                    <button class="clear-chat" onclick="clearChat()">🗑️ Clear Chat</button>
+                </div>
                 <div class="chat-messages" id="chatMessages">
-                    <div class="chat-message ai">
-                        <strong>👾 BRICK AI</strong>
-                        <p>Hello! I'm BRICK AI, your friendly assistant. Ask me anything! 😊</p>
-                        <span class="time">Just now</span>
-                    </div>
+                    <!-- Messages will be loaded here -->
                 </div>
                 <div class="chat-typing" id="chatTyping">
                     <span class="blinking-emoji-small">👾</span> BRICK AI is thinking...
@@ -766,7 +814,30 @@ MAIN_TEMPLATE = '''
     
     <script>
         let currentMode = 'all';
+        let chatHistory = [];
         
+        // Load chat history from server
+        function loadChatHistory() {
+            fetch('/get-chat-history')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.history) {
+                        chatHistory = data.history;
+                        const container = document.getElementById('chatMessages');
+                        container.innerHTML = '';
+                        if (chatHistory.length === 0) {
+                            addMessage('ai', 'Hello! I\'m BRICK AI, your friendly assistant. Ask me anything! 😊');
+                        } else {
+                            chatHistory.forEach(msg => {
+                                addMessage('user', msg.message);
+                                addMessage('ai', msg.response);
+                            });
+                        }
+                    }
+                });
+        }
+        
+        // Tab switching
         function switchTab(tab) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -774,6 +845,8 @@ MAIN_TEMPLATE = '''
                 document.getElementById('searchTab').classList.add('active');
             } else {
                 document.getElementById('chatTab').classList.add('active');
+                // Load chat history when switching to chat tab
+                loadChatHistory();
             }
             event.target.classList.add('active');
         }
@@ -853,6 +926,18 @@ MAIN_TEMPLATE = '''
             container.scrollTop = container.scrollHeight;
         }
         
+        function clearChat() {
+            if (confirm('Are you sure you want to clear the chat history?')) {
+                fetch('/clear-chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                }).then(() => {
+                    document.getElementById('chatMessages').innerHTML = '';
+                    addMessage('ai', 'Chat cleared! Start a new conversation. 😊');
+                });
+            }
+        }
+        
         function showFeedback() {
             const feedback = prompt('We value your feedback! Please share your thoughts:');
             if (feedback) {
@@ -872,6 +957,17 @@ MAIN_TEMPLATE = '''
         document.getElementById('searchQuery').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') performSearch();
         });
+        
+        // Load chat history on page load
+        window.onload = function() {
+            loadChatHistory();
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('loading') === 'true') {
+                document.getElementById('searchLoading').classList.add('active');
+                document.getElementById('searchBtn').disabled = true;
+                document.getElementById('searchBtn').textContent = '⏳ Searching...';
+            }
+        };
     </script>
 </body>
 </html>
@@ -892,21 +988,22 @@ SETTINGS_TEMPLATE = '''
             min-height: 100vh;
             padding: 20px;
         }
-        .container { max-width: 600px; margin: 0 auto; }
+        .container { max-width: 700px; margin: 0 auto; }
         .settings-card {
             background: rgba(255,255,255,0.95);
             padding: 30px;
             border-radius: 15px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
-        h1 { text-align: center; margin-bottom: 25px; color: #667eea; }
+        h1 { text-align: center; margin-bottom: 25px; color: #667eea; font-size: 28px; }
         .setting-item {
             margin-bottom: 25px;
             padding-bottom: 20px;
             border-bottom: 1px solid #e0e0e0;
         }
         .setting-item:last-child { border-bottom: none; }
-        .setting-label { font-weight: bold; color: #333; margin-bottom: 10px; display: block; }
+        .setting-label { font-weight: bold; color: #333; margin-bottom: 10px; display: block; font-size: 16px; }
+        .setting-desc { color: #666; font-size: 13px; margin-top: 5px; }
         .theme-options { display: flex; gap: 15px; }
         .theme-btn {
             flex: 1;
@@ -919,7 +1016,35 @@ SETTINGS_TEMPLATE = '''
             transition: all 0.3s;
         }
         .theme-btn.active { border-color: #667eea; background: #f8f9ff; }
-        .theme-btn:hover { border-color: #667eea; }
+        .theme-btn:hover { border-color: #667eea; transform: translateY(-2px); }
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 0;
+        }
+        .toggle {
+            position: relative;
+            width: 50px;
+            height: 28px;
+            background: #ccc;
+            border-radius: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .toggle.active { background: #667eea; }
+        .toggle .slider {
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 22px;
+            height: 22px;
+            background: white;
+            border-radius: 50%;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .toggle.active .slider { left: 25px; }
         .logout-btn {
             width: 100%;
             padding: 15px;
@@ -933,14 +1058,16 @@ SETTINGS_TEMPLATE = '''
             text-decoration: none;
             display: inline-block;
             text-align: center;
+            transition: all 0.3s;
         }
-        .logout-btn:hover { background: #c0392b; }
+        .logout-btn:hover { background: #c0392b; transform: translateY(-2px); }
         .back-btn {
             display: inline-block;
             margin-bottom: 20px;
             color: #667eea;
             text-decoration: none;
             font-weight: bold;
+            font-size: 16px;
         }
         .back-btn:hover { text-decoration: underline; }
         .user-info {
@@ -949,6 +1076,21 @@ SETTINGS_TEMPLATE = '''
             border-radius: 8px;
             margin-bottom: 20px;
         }
+        .user-info p { margin: 5px 0; color: #333; }
+        .user-info strong { color: #667eea; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+        }
+        .stat-box {
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-box .number { font-size: 24px; font-weight: bold; color: #667eea; }
+        .stat-box .label { color: #666; font-size: 13px; margin-top: 5px; }
         .flash-messages { margin-bottom: 20px; }
         .flash {
             padding: 12px;
@@ -957,6 +1099,26 @@ SETTINGS_TEMPLATE = '''
         }
         .flash.error { background: #fee; color: #c00; border: 1px solid #fcc; }
         .flash.success { background: #efe; color: #080; border: 1px solid #cfc; }
+        .action-btn {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .action-btn:hover { transform: translateY(-2px); }
+        .btn-warning { background: #f39c12; color: white; }
+        .btn-warning:hover { background: #e67e22; }
+        .btn-info { background: #3498db; color: white; }
+        .btn-info:hover { background: #2980b9; }
+        @media (max-width: 600px) {
+            .stats-grid { grid-template-columns: 1fr; }
+            .theme-options { flex-direction: column; }
+        }
     </style>
 </head>
 <body>
@@ -974,22 +1136,61 @@ SETTINGS_TEMPLATE = '''
         <a href="/dashboard" class="back-btn">← Back to Home</a>
         <div class="settings-card">
             <h1>⚙️ BRICK AI Settings</h1>
+            
             <div class="user-info">
-                <strong>👤 Logged in as:</strong> {{ session.get('username') }}<br>
-                <strong>📧 Email:</strong> {{ session.get('user_email', 'N/A') }}
+                <p><strong>👤 Username:</strong> {{ session.get('username') }}</p>
+                <p><strong>📧 Email:</strong> {{ session.get('user_email', 'N/A') }}</p>
+                <p><strong>📅 Member Since:</strong> {{ created_at }}</p>
             </div>
+            
             <div class="setting-item">
-                <span class="setting-label">🎨 Theme</span>
+                <span class="setting-label">🎨 App Theme</span>
                 <div class="theme-options">
                     <button class="theme-btn {% if session.get('theme') != 'dark' %}active{% endif %}" onclick="setTheme('light')">☀️ Light</button>
                     <button class="theme-btn {% if session.get('theme') == 'dark' %}active{% endif %}" onclick="setTheme('dark')">🌙 Dark</button>
                 </div>
             </div>
+            
             <div class="setting-item">
-                <span class="setting-label">📊 Stats</span>
-                <p>Total Searches: {{ search_count }}</p>
-                <p>Member Since: {{ created_at }}</p>
+                <span class="setting-label">💬 Chat Settings</span>
+                <div class="toggle-container">
+                    <span>Auto-save chat history</span>
+                    <div class="toggle active" onclick="toggleSetting('auto_save')">
+                        <div class="slider"></div>
+                    </div>
+                </div>
+                <div class="toggle-container">
+                    <span>Show timestamps</span>
+                    <div class="toggle active" onclick="toggleSetting('timestamps')">
+                        <div class="slider"></div>
+                    </div>
+                </div>
             </div>
+            
+            <div class="setting-item">
+                <span class="setting-label">📊 Account Statistics</span>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="number">{{ search_count }}</div>
+                        <div class="label">Searches</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="number">{{ chat_count }}</div>
+                        <div class="label">Chats</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="number">{{ feedback_count }}</div>
+                        <div class="label">Feedback</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="setting-item">
+                <span class="setting-label">📝 Data Management</span>
+                <button class="action-btn btn-warning" onclick="clearHistory()">🗑️ Clear Search History</button>
+                <button class="action-btn btn-info" onclick="exportData()">📤 Export My Data</button>
+            </div>
+            
             <div class="setting-item">
                 <span class="setting-label">🔐 Account</span>
                 <a href="/logout" class="logout-btn">🚪 Logout</a>
@@ -1003,6 +1204,32 @@ SETTINGS_TEMPLATE = '''
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({theme: theme})
             }).then(() => location.reload());
+        }
+        
+        function toggleSetting(setting) {
+            const toggle = event.target.closest('.toggle');
+            toggle.classList.toggle('active');
+            fetch('/update-setting', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({setting: setting, value: toggle.classList.contains('active')})
+            });
+        }
+        
+        function clearHistory() {
+            if (confirm('Are you sure you want to clear all your search history?')) {
+                fetch('/clear-history', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                }).then(() => {
+                    alert('Search history cleared!');
+                    location.reload();
+                });
+            }
+        }
+        
+        function exportData() {
+            window.location.href = '/export-data';
         }
     </script>
 </body>
@@ -1117,47 +1344,33 @@ def search():
     
     html_parts = []
     
-    # Google Search
-    if mode in ['all', 'google']:
-        google_results = search_google(query)
-        if google_results:
+    # Google/Bing Search (using DuckDuckGo)
+    if mode in ['all', 'google', 'bing']:
+        results = search_duckduckgo(query)
+        if results:
+            source_name = 'Google' if mode == 'google' else 'Bing' if mode == 'bing' else 'Search'
+            icon = '🌐' if mode == 'google' else '🔎' if mode == 'bing' else '🔍'
             html_parts.append('<div class="source-section">')
-            html_parts.append('<div class="source-header"><span class="source-icon">🌐</span> Google Search</div>')
-            for i, url in enumerate(google_results[:5], 1):
+            html_parts.append(f'<div class="source-header"><span class="source-icon">{icon}</span> {source_name} Results</div>')
+            for item in results[:5]:
+                title = item.get('title', 'Result')
+                summary = item.get('summary', '')
+                url = item.get('url', '#')
                 html_parts.append(f'''
                 <div class="result-item">
-                    <div class="result-title">Result {i}</div>
-                    <a href="{url}" target="_blank" class="result-link">🔗 {url[:80]}...</a>
+                    <div class="result-title">{title}</div>
+                    <div class="result-summary">{summary}</div>
+                    <a href="{url}" target="_blank" class="result-link">🔗 Visit Link</a>
                 </div>
                 ''')
             html_parts.append('</div>')
         else:
+            source_name = 'Google' if mode == 'google' else 'Bing' if mode == 'bing' else 'Search'
+            icon = '🌐' if mode == 'google' else '🔎' if mode == 'bing' else '🔍'
             html_parts.append(f'''
             <div class="source-section">
-                <div class="source-header"><span class="source-icon">🌐</span> Google Search</div>
-                <div class="result-item">No Google results found for "{query}".</div>
-            </div>
-            ''')
-    
-    # Bing Search
-    if mode in ['all', 'bing']:
-        bing_results = search_bing(query)
-        if bing_results:
-            html_parts.append('<div class="source-section">')
-            html_parts.append('<div class="source-header"><span class="source-icon">🔎</span> Bing Search</div>')
-            for i, url in enumerate(bing_results[:3], 1):
-                html_parts.append(f'''
-                <div class="result-item">
-                    <div class="result-title">Result {i}</div>
-                    <a href="{url}" target="_blank" class="result-link">🔗 {url[:80]}...</a>
-                </div>
-                ''')
-            html_parts.append('</div>')
-        else:
-            html_parts.append(f'''
-            <div class="source-section">
-                <div class="source-header"><span class="source-icon">🔎</span> Bing Search</div>
-                <div class="result-item">No Bing results found for "{query}".</div>
+                <div class="source-header"><span class="source-icon">{icon}</span> {source_name}</div>
+                <div class="result-item">No results found for "{query}". Try a different search.</div>
             </div>
             ''')
     
@@ -1229,7 +1442,7 @@ def chat():
     if not message:
         return jsonify({'error': 'No message provided'}), 400
     
-    response = get_ai_response(f"You are BRICK AI, a friendly assistant. Respond to: {message}")
+    response = get_ai_response(message)
     
     # Save chat to database
     conn = get_db()
@@ -1240,6 +1453,40 @@ def chat():
     conn.close()
     
     return jsonify({'response': response})
+
+@app.route('/get-chat-history', methods=['GET'])
+def get_chat_history():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT message, response, timestamp FROM chat_messages WHERE user_id = ? ORDER BY timestamp ASC', (session['user_id'],))
+    messages = c.fetchall()
+    conn.close()
+    
+    history = []
+    for msg in messages:
+        history.append({
+            'message': msg['message'],
+            'response': msg['response'],
+            'timestamp': msg['timestamp']
+        })
+    
+    return jsonify({'history': history})
+
+@app.route('/clear-chat', methods=['POST'])
+def clear_chat():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('DELETE FROM chat_messages WHERE user_id = ?', (session['user_id'],))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({'success': True})
 
 @app.route('/settings')
 def settings():
@@ -1258,9 +1505,15 @@ def settings():
         return redirect('/login')
     
     search_count = c.execute('SELECT COUNT(*) FROM search_history WHERE user_id = ?', (session['user_id'],)).fetchone()[0]
+    chat_count = c.execute('SELECT COUNT(*) FROM chat_messages WHERE user_id = ?', (session['user_id'],)).fetchone()[0]
+    feedback_count = c.execute('SELECT COUNT(*) FROM feedback WHERE user_id = ?', (session['user_id'],)).fetchone()[0]
     conn.close()
     
-    return render_template_string(SETTINGS_TEMPLATE, user=user, search_count=search_count, 
+    return render_template_string(SETTINGS_TEMPLATE, 
+                                 user=user, 
+                                 search_count=search_count,
+                                 chat_count=chat_count,
+                                 feedback_count=feedback_count,
                                  created_at=user['created_at'])
 
 @app.route('/set-theme', methods=['POST'])
@@ -1280,6 +1533,66 @@ def set_theme():
     session['theme'] = theme
     return jsonify({'success': True})
 
+@app.route('/update-setting', methods=['POST'])
+def update_setting():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    data = request.get_json()
+    setting = data.get('setting')
+    value = data.get('value')
+    
+    # Store in session
+    session[setting] = value
+    
+    return jsonify({'success': True})
+
+@app.route('/clear-history', methods=['POST'])
+def clear_history():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('DELETE FROM search_history WHERE user_id = ?', (session['user_id'],))
+    conn.commit()
+    conn.close()
+    
+    flash('Search history cleared!', 'success')
+    return jsonify({'success': True})
+
+@app.route('/export-data', methods=['GET'])
+def export_data():
+    if 'user_id' not in session:
+        flash('Please login first.', 'error')
+        return redirect('/login')
+    
+    conn = get_db()
+    c = conn.cursor()
+    
+    c.execute('SELECT * FROM users WHERE id = ?', (session['user_id'],))
+    user = c.fetchone()
+    
+    c.execute('SELECT * FROM search_history WHERE user_id = ?', (session['user_id'],))
+    searches = c.fetchall()
+    
+    c.execute('SELECT * FROM chat_messages WHERE user_id = ?', (session['user_id'],))
+    chats = c.fetchall()
+    
+    c.execute('SELECT * FROM feedback WHERE user_id = ?', (session['user_id'],))
+    feedbacks = c.fetchall()
+    conn.close()
+    
+    export = {
+        'user': dict(user),
+        'searches': [dict(s) for s in searches],
+        'chats': [dict(c) for c in chats],
+        'feedback': [dict(f) for f in feedbacks],
+        'exported_at': datetime.now().isoformat()
+    }
+    
+    return jsonify(export)
+
 @app.route('/submit-feedback', methods=['POST'])
 def submit_feedback():
     if 'user_id' not in session:
@@ -1294,8 +1607,9 @@ def submit_feedback():
         c.execute('INSERT INTO feedback (user_id, message) VALUES (?, ?)', (session['user_id'], message))
         conn.commit()
         conn.close()
+        return jsonify({'success': True})
     
-    return jsonify({'success': True})
+    return jsonify({'error': 'No message provided'}), 400
 
 @app.route('/logout')
 def logout():

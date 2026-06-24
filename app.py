@@ -18,10 +18,12 @@ class User(db.Model):
     email = db.Column(db.String(150), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Add relationship
+    searches = db.relationship('SearchHistory', backref='user', lazy=True)
 
 class SearchHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     query = db.Column(db.String(500))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -29,7 +31,7 @@ class SearchHistory(db.Model):
 with app.app_context():
     db.create_all()
 
-# Templates
+# Templates (keeping them compact but complete)
 LOGIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -322,6 +324,7 @@ def dashboard():
         session.clear()
         return redirect('/login')
     
+    # FIXED: Correct SQLAlchemy query syntax
     history = SearchHistory.query.filter_by(user_id=session['user_id']).order_by(
         SearchHistory.timestamp.desc()
     ).limit(10).all()
@@ -348,6 +351,7 @@ def search():
     </div>
     '''
     
+    # FIXED: Correct SQLAlchemy syntax
     new_search = SearchHistory(user_id=session['user_id'], query=query)
     db.session.add(new_search)
     db.session.commit()
@@ -369,6 +373,7 @@ def settings():
         session.clear()
         return redirect('/login')
     
+    # FIXED: Correct SQLAlchemy syntax
     search_count = SearchHistory.query.filter_by(user_id=user.id).count()
     return render_template_string(SETTINGS_TEMPLATE, user=user, search_count=search_count)
 

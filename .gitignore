@@ -1,52 +1,12 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
 # Environment variables
 .env
-.env.local
-.env.production
+.env.*
+*.env
 
-# Logs
+# Everything else...
+__pycache__/
+*.pyc
+*.db
 *.log
-brick_ai.log
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Flask
-instance/
-.webassets-cache
+venv/
+.venv/

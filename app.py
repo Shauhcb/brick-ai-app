@@ -1,4 +1,4 @@
-# 1. First, imports
+# app.py - Complete Fixed Version
 from flask import Flask, render_template, request, redirect, session, flash, jsonify, g
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
@@ -16,17 +16,15 @@ import logging
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 
-# 2. Load environment variables
+# Load environment variables
 load_dotenv()
 
-# 3. Create the Flask app
-app = Flask(__name__)  # ✅ app is defined here
+# Create the Flask app
+app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
-# 4. Database configuration
-DB_PATH = os.environ.get('DATABASE_PATH', 'brick_ai.db')
-
+# --- Database Configuration ---
 def get_db():
     """Get database connection"""
     if 'db' not in g:
@@ -42,16 +40,15 @@ def get_db():
             g.db.row_factory = sqlite3.Row
     return g.db
 
-# 5. Database teardown - app must exist!
-@app.teardown_appcontext  # ✅ Now app exists!
+@app.teardown_appcontext
 def close_db(exception):
     db = g.pop('db', None)
     if db is not None:
         db.close()
 
-# 6. Database initialization
 def init_db():
-    """Initialize database tables"""
+    """Initialize database tables - MUST be called inside app context"""
+    # This function will be called inside app.app_context()
     db = get_db()
     cursor = db.cursor()
     
@@ -115,6 +112,9 @@ def init_db():
                 date DATE DEFAULT CURRENT_DATE
             )
         ''')
+        # Create indexes
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_user_timestamp ON search_history(user_id, timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_user_timestamp ON chat_messages(user_id, timestamp)')
     else:
         # SQLite tables
         cursor.execute('''CREATE TABLE IF NOT EXISTS users (
@@ -168,14 +168,18 @@ def init_db():
             total_tokens INTEGER DEFAULT 0,
             date DATE DEFAULT CURRENT_DATE
         )''')
+        # Create indexes
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_user_timestamp ON search_history(user_id, timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_user_timestamp ON chat_messages(user_id, timestamp)')
     
     db.commit()
     print("✅ Database initialized!")
 
-# 7. Call database initialization
-init_db()
+# Initialize database WITH application context
+with app.app_context():
+    init_db()
 
-# 8. AI Client Setup
+# --- AI Client Setup ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 gemini_client = None
 
@@ -264,7 +268,7 @@ def search_wikipedia(query):
         print(f"Wikipedia error: {e}")
     return []
 
-# 9. Rate limiting setup
+# --- Rate Limiting ---
 RATE_LIMIT = {
     'chat': {'requests': 20, 'period': 60},
     'search': {'requests': 10, 'period': 60},
@@ -292,7 +296,11 @@ def rate_limit(limit_key='default'):
         return decorated_function
     return decorator
 
-# 10. Routes
+# Helper function to get parameter placeholder
+def get_placeholder():
+    return '%s' if os.environ.get('DATABASE_URL') else '?'
+
+# --- Routes ---
 @app.route('/')
 def index():
     return redirect('/dashboard' if 'user_id' in session else '/login')
@@ -306,14 +314,15 @@ def login():
         password = request.form.get('password')
         db = get_db()
         cursor = db.cursor()
-        cursor.execute('SELECT * FROM users WHERE email = %s' if os.environ.get('DATABASE_URL') else 'SELECT * FROM users WHERE email = ?', (email,))
+        placeholder = get_placeholder()
+        cursor.execute(f'SELECT * FROM users WHERE email = {placeholder}', (email,))
         user = cursor.fetchone()
         if user and check_password_hash(user['password_hash'], password):
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['user_email'] = user['email']
             session['theme'] = user['theme'] or 'light'
-            cursor.execute('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = %s' if os.environ.get('DATABASE_URL') else 'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?', (user['id'],))
+            cursor.execute(f'UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = {placeholder}', (user['id'],))
             db.commit()
             flash('Logged in successfully!', 'success')
             return redirect('/dashboard')
@@ -330,15 +339,19 @@ def register():
         password = request.form.get('password')
         db = get_db()
         cursor = db.cursor()
-        cursor.execute('SELECT * FROM users WHERE email = %s' if os.environ.get('DATABASE_URL') else 'SELECT * FROM users WHERE email = ?', (email,))
+        placeholder = get_placeholder()
+        
+        cursor.execute(f'SELECT * FROM users WHERE email = {placeholder}', (email,))
         if cursor.fetchone():
             flash('Email already registered!', 'error')
             return render_template('register.html')
-        cursor.execute('SELECT * FROM users WHERE username = %s' if os.environ.get('DATABASE_URL') else 'SELECT * FROM users WHERE username = ?', (username,))
+        
+        cursor.execute(f'SELECT * FROM users WHERE username = {placeholder}', (username,))
         if cursor.fetchone():
             flash('Username already taken!', 'error')
             return render_template('register.html')
-        cursor.execute('INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)' if os.environ.get('DATABASE_URL') else 'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
+        
+        cursor.execute(f'INSERT INTO users (username, email, password_hash) VALUES ({placeholder}, {placeholder}, {placeholder})',
                        (username, email, generate_password_hash(password)))
         db.commit()
         flash('Account created! Please login.', 'success')
@@ -358,6 +371,7 @@ def search():
         return redirect('/login')
     db = get_db()
     cursor = db.cursor()
+    placeholder = get_placeholder()
     
     if request.method == 'POST':
         query = request.form.get('query', '')
@@ -378,15 +392,15 @@ def search():
         response_time = int((time() - start_time) * 1000)
         
         summary = f"Web: {len(results_data['web'])}, Wiki: {len(results_data['wiki'])}, AI: {'Yes' if results_data['ai'] else 'No'}"
-        cursor.execute('INSERT INTO search_history (user_id, query, result, mode, response_time) VALUES (%s, %s, %s, %s, %s)' if os.environ.get('DATABASE_URL') else 'INSERT INTO search_history (user_id, query, result, mode, response_time) VALUES (?, ?, ?, ?, ?)',
+        cursor.execute(f'INSERT INTO search_history (user_id, query, result, mode, response_time) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})',
                        (session['user_id'], query, summary, mode, response_time))
         db.commit()
         
-        cursor.execute('SELECT * FROM search_history WHERE user_id = %s ORDER BY timestamp DESC LIMIT 10' if os.environ.get('DATABASE_URL') else 'SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
+        cursor.execute(f'SELECT * FROM search_history WHERE user_id = {placeholder} ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
         history = cursor.fetchall()
         return render_template('search.html', results_data=results_data, query=query, history=history, mode=mode)
     
-    cursor.execute('SELECT * FROM search_history WHERE user_id = %s ORDER BY timestamp DESC LIMIT 10' if os.environ.get('DATABASE_URL') else 'SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
+    cursor.execute(f'SELECT * FROM search_history WHERE user_id = {placeholder} ORDER BY timestamp DESC LIMIT 10', (session['user_id'],))
     history = cursor.fetchall()
     return render_template('search.html', results_data=None, query='', history=history, mode='all')
 
@@ -406,7 +420,8 @@ def chat():
     
     db = get_db()
     cursor = db.cursor()
-    cursor.execute('INSERT INTO chat_messages (user_id, message, response, response_time) VALUES (%s, %s, %s, %s)' if os.environ.get('DATABASE_URL') else 'INSERT INTO chat_messages (user_id, message, response, response_time) VALUES (?, ?, ?, ?)',
+    placeholder = get_placeholder()
+    cursor.execute(f'INSERT INTO chat_messages (user_id, message, response, response_time) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})',
                    (session['user_id'], message, response, response_time))
     db.commit()
     return jsonify({'response': response})
@@ -417,7 +432,8 @@ def get_chat_history():
         return jsonify({'error': 'Not logged in'}), 401
     db = get_db()
     cursor = db.cursor()
-    cursor.execute('SELECT message, response, timestamp FROM chat_messages WHERE user_id = %s ORDER BY timestamp ASC' if os.environ.get('DATABASE_URL') else 'SELECT message, response, timestamp FROM chat_messages WHERE user_id = ? ORDER BY timestamp ASC', (session['user_id'],))
+    placeholder = get_placeholder()
+    cursor.execute(f'SELECT message, response, timestamp FROM chat_messages WHERE user_id = {placeholder} ORDER BY timestamp ASC', (session['user_id'],))
     messages = cursor.fetchall()
     return jsonify({'history': [dict(msg) for msg in messages]})
 
@@ -427,7 +443,8 @@ def clear_chat():
         return jsonify({'error': 'Not logged in'}), 401
     db = get_db()
     cursor = db.cursor()
-    cursor.execute('DELETE FROM chat_messages WHERE user_id = %s' if os.environ.get('DATABASE_URL') else 'DELETE FROM chat_messages WHERE user_id = ?', (session['user_id'],))
+    placeholder = get_placeholder()
+    cursor.execute(f'DELETE FROM chat_messages WHERE user_id = {placeholder}', (session['user_id'],))
     db.commit()
     return jsonify({'success': True})
 
@@ -437,16 +454,18 @@ def settings():
         return redirect('/login')
     db = get_db()
     cursor = db.cursor()
-    cursor.execute('SELECT * FROM users WHERE id = %s' if os.environ.get('DATABASE_URL') else 'SELECT * FROM users WHERE id = ?', (session['user_id'],))
+    placeholder = get_placeholder()
+    
+    cursor.execute(f'SELECT * FROM users WHERE id = {placeholder}', (session['user_id'],))
     user = cursor.fetchone()
     if not user:
         return redirect('/login')
     
-    cursor.execute('SELECT COUNT(*) FROM search_history WHERE user_id = %s' if os.environ.get('DATABASE_URL') else 'SELECT COUNT(*) FROM search_history WHERE user_id = ?', (session['user_id'],))
+    cursor.execute(f'SELECT COUNT(*) FROM search_history WHERE user_id = {placeholder}', (session['user_id'],))
     search_count = cursor.fetchone()[0]
-    cursor.execute('SELECT COUNT(*) FROM chat_messages WHERE user_id = %s' if os.environ.get('DATABASE_URL') else 'SELECT COUNT(*) FROM chat_messages WHERE user_id = ?', (session['user_id'],))
+    cursor.execute(f'SELECT COUNT(*) FROM chat_messages WHERE user_id = {placeholder}', (session['user_id'],))
     chat_count = cursor.fetchone()[0]
-    cursor.execute('SELECT COUNT(*) FROM feedback WHERE user_id = %s' if os.environ.get('DATABASE_URL') else 'SELECT COUNT(*) FROM feedback WHERE user_id = ?', (session['user_id'],))
+    cursor.execute(f'SELECT COUNT(*) FROM feedback WHERE user_id = {placeholder}', (session['user_id'],))
     feedback_count = cursor.fetchone()[0]
     
     return render_template('settings.html', user=user, search_count=search_count, chat_count=chat_count, feedback_count=feedback_count)
@@ -458,7 +477,8 @@ def set_theme():
     theme = request.get_json().get('theme', 'light')
     db = get_db()
     cursor = db.cursor()
-    cursor.execute('UPDATE users SET theme = %s WHERE id = %s' if os.environ.get('DATABASE_URL') else 'UPDATE users SET theme = ? WHERE id = ?', (theme, session['user_id']))
+    placeholder = get_placeholder()
+    cursor.execute(f'UPDATE users SET theme = {placeholder} WHERE id = {placeholder}', (theme, session['user_id']))
     db.commit()
     session['theme'] = theme
     return jsonify({'success': True})
@@ -471,7 +491,8 @@ def submit_feedback():
     if message:
         db = get_db()
         cursor = db.cursor()
-        cursor.execute('INSERT INTO feedback (user_id, message) VALUES (%s, %s)' if os.environ.get('DATABASE_URL') else 'INSERT INTO feedback (user_id, message) VALUES (?, ?)',
+        placeholder = get_placeholder()
+        cursor.execute(f'INSERT INTO feedback (user_id, message) VALUES ({placeholder}, {placeholder})',
                       (session['user_id'], message))
         db.commit()
         return jsonify({'success': True})
@@ -483,7 +504,15 @@ def logout():
     flash('Logged out successfully.', 'success')
     return redirect('/login')
 
-# 11. Run the app
+@app.errorhandler(404)
+def not_found(error):
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return render_template('error.html', error=str(error)), 500
+
+# --- Run the app ---
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=True)

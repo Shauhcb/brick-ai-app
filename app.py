@@ -47,7 +47,8 @@ def init_db():
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
-        c.execute('''CREATE TABLE IF NOT EXISTS feedback (
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS feedback (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         message TEXT NOT NULL,

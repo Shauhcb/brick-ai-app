@@ -6,7 +6,15 @@ from datetime import datetime
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'brick_ai_super_secret_key_123')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///brick_ai.db'
+# Database configuration for Render (PostgreSQL) and Local (SQLite)
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    # Render uses postgres://, but modern SQLAlchemy requires postgresql://
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///brick_ai.db' 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)

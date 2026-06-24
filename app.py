@@ -5,6 +5,8 @@ import os
 import requests
 from datetime import datetime
 import json
+import urllib.parse
+import html
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'brick_ai_super_secret_key_123')
@@ -19,7 +21,6 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
     
-    # Create tables
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -48,6 +49,15 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
     
+    c.execute('''CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        message TEXT NOT NULL,
+        response TEXT NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )''')
+    
     conn.commit()
     conn.close()
     print("✅ Database initialized!")
@@ -58,13 +68,17 @@ init_db()
 # Try importing optional packages
 try:
     import wikipedia
+    print("✅ Wikipedia imported")
 except ImportError:
     wikipedia = None
+    print("⚠️ Wikipedia not available")
 
 try:
     from googlesearch import search as google_search
+    print("✅ Google search imported")
 except ImportError:
     google_search = None
+    print("⚠️ Google search not available")
 
 # Gemini AI (optional)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -99,10 +113,12 @@ def search_google(query):
         return []
     try:
         results = []
-        for url in google_search(query, num_results=3):
+        search_results = google_search(query, num_results=5, stop=5, pause=1)
+        for url in search_results:
             results.append(url)
         return results
-    except:
+    except Exception as e:
+        print(f"Google search error: {e}")
         return []
 
 def search_bing(query):
@@ -110,12 +126,13 @@ def search_bing(query):
         bing_api_key = os.environ.get("BING_API_KEY", "")
         if bing_api_key:
             headers = {"Ocp-Apim-Subscription-Key": bing_api_key}
-            params = {"q": query, "mkt": "en-us"}
-            response = requests.get("https://api.bing.microsoft.com/v7.0/search", headers=headers, params=params)
+            params = {"q": query, "mkt": "en-us", "count": 3}
+            response = requests.get("https://api.bing.microsoft.com/v7.0/search", headers=headers, params=params, timeout=10)
             data = response.json()
             return [r['url'] for r in data.get('webPages', {}).get('value', [])[:3]]
         return []
-    except:
+    except Exception as e:
+        print(f"Bing search error: {e}")
         return []
 
 def search_wikipedia(query):
@@ -127,26 +144,65 @@ def search_wikipedia(query):
         for title in results:
             try:
                 page = wikipedia.page(title)
-                summary = wikipedia.summary(title, sentences=2)
-                summaries.append({'title': title, 'summary': summary, 'url': page.url})
+                summary = wikipedia.summary(title, sentences=3)
+                summaries.append({
+                    'title': title,
+                    'summary': summary,
+                    'url': page.url
+                })
             except:
                 continue
         return summaries
-    except:
+    except Exception as e:
+        print(f"Wikipedia search error: {e}")
         return []
 
 def smart_search(query):
-    result = query_gemini(f"Provide a concise answer to: {query}")
-    return result if result else "AI search unavailable"
+    if not gemini_client:
+        return "AI search is not configured. Please add GEMINI_API_KEY to enable AI features."
+    
+    prompt = f"""Provide a comprehensive and well-structured answer to this query: {query}
+    
+    Format your response with:
+    1. A clear overview
+    2. Key points or facts
+    3. Relevant examples if applicable
+    4. A conclusion or summary
+    
+    Keep it informative but concise (2-3 paragraphs)."""
+    
+    result = query_gemini(prompt)
+    return result if result else "AI search is currently unavailable. Please try again later."
+
+def chat_with_ai(message):
+    """Chat with AI for the interactive chat feature"""
+    if not gemini_client:
+        return "🤖 AI chat is not configured. Please add GEMINI_API_KEY to enable chat features."
+    
+    prompt = f"""You are BRICK AI, a friendly and helpful AI assistant. Respond to this user message: {message}
+    
+    Guidelines:
+    - Be conversational and friendly
+    - Provide helpful, accurate information
+    - Keep responses concise but informative
+    - If you don't know something, be honest about it
+    """
+    
+    result = query_gemini(prompt)
+    return result if result else "🤖 I'm having trouble responding right now. Please try again!"
 
 def summarize_content(url):
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=5)
-        text = response.text[:500]
-        return text[:200] + "..."
-    except:
-        return "Unable to fetch content"
+        text = response.text[:1000]
+        import re
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = ' '.join(text.split())
+        return text[:300] + "..."
+    except Exception as e:
+        print(f"Summarization error: {e}")
+        return "Click to view the full content"
 
 # Templates
 MAIN_TEMPLATE = '''
@@ -155,43 +211,117 @@ MAIN_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BRICK AI - Search</title>
+    <title>BRICK AI 👾 - Search & Chat</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #1e3c72 0%, #2a5298 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
+            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
             min-height: 100vh;
             padding: 20px;
         }
-        .container { max-width: 900px; margin: 0 auto; }
+        .container { max-width: 1000px; margin: 0 auto; }
         .header {
             background: rgba(255,255,255,0.95);
-            padding: 20px;
+            padding: 20px 25px;
             border-radius: 15px;
             margin-bottom: 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
-        .header h1 { color: #667eea; font-size: 28px; }
-        .header-buttons { display: flex; gap: 10px; }
+        .header h1 { 
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        /* Glowing Green Title */
+        .glow-title {
+            color: #00ff41;
+            text-shadow: 
+                0 0 5px #00ff41,
+                0 0 10px #00ff41,
+                0 0 20px #00ff41,
+                0 0 40px #00ff41,
+                0 0 80px #00ff41,
+                0 0 120px #00ff41;
+            animation: glowPulse 2s ease-in-out infinite;
+            font-weight: bold;
+        }
+        @keyframes glowPulse {
+            0%, 100% {
+                text-shadow: 
+                    0 0 5px #00ff41,
+                    0 0 10px #00ff41,
+                    0 0 20px #00ff41,
+                    0 0 40px #00ff41,
+                    0 0 80px #00ff41;
+            }
+            50% {
+                text-shadow: 
+                    0 0 10px #00ff41,
+                    0 0 20px #00ff41,
+                    0 0 40px #00ff41,
+                    0 0 80px #00ff41,
+                    0 0 160px #00ff41,
+                    0 0 200px #00ff41;
+            }
+        }
+        .header h1 span { font-size: 32px; }
+        .header-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
         .btn-icon {
             background: #667eea;
             color: white;
             border: none;
-            padding: 10px 15px;
+            padding: 10px 18px;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 15px;
             text-decoration: none;
+            display: inline-block;
+            transition: all 0.3s;
         }
-        .btn-icon:hover { background: #5a6fd6; }
+        .btn-icon:hover { background: #5a6fd6; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+        
+        /* Tab Navigation */
+        .tab-navigation {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .tab-btn {
+            padding: 12px 25px;
+            background: rgba(255,255,255,0.9);
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            color: #667eea;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
+        }
+        .tab-btn:hover { background: white; transform: translateY(-2px); }
+        .tab-btn.active { background: #667eea; color: white; box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
+        
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        
         .search-box {
             background: rgba(255,255,255,0.95);
             padding: 25px;
             border-radius: 15px;
             margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
         .search-input {
             width: 100%;
@@ -200,47 +330,196 @@ MAIN_TEMPLATE = '''
             border-radius: 10px;
             font-size: 16px;
             margin-bottom: 15px;
+            transition: border-color 0.3s;
         }
-        .search-input:focus { outline: none; border-color: #667eea; }
+        .search-input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        
+        /* Search Mode - All buttons in one row */
         .search-mode {
             display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+            gap: 8px;
             margin-bottom: 15px;
+            flex-wrap: nowrap;
+            overflow-x: auto;
         }
         .mode-btn {
-            padding: 10px 20px;
+            padding: 8px 14px;
             border: 2px solid #667eea;
             background: white;
             color: #667eea;
             border-radius: 8px;
             cursor: pointer;
             font-weight: bold;
+            font-size: 13px;
+            transition: all 0.3s;
+            white-space: nowrap;
+            flex: 1;
+            min-width: 70px;
+            text-align: center;
         }
         .mode-btn.active { background: #667eea; color: white; }
+        .mode-btn:hover { background: #667eea; color: white; transform: translateY(-2px); }
+        
         .search-btn {
             width: 100%;
             padding: 15px;
-            background: #667eea;
-            color: white;
+            background: linear-gradient(135deg, #00ff41, #00cc33);
+            color: #0a0a0a;
             border: none;
             border-radius: 10px;
             font-size: 18px;
             font-weight: bold;
             cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            box-shadow: 0 0 20px rgba(0,255,65,0.3);
         }
-        .search-btn:hover { background: #5a6fd6; }
+        .search-btn:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 0 40px rgba(0,255,65,0.5);
+        }
+        .search-btn:disabled { opacity: 0.7; cursor: not-allowed; transform: none; }
+        
+        /* Loading Animation */
+        .loading-container {
+            display: none;
+            text-align: center;
+            padding: 30px;
+            background: rgba(255,255,255,0.95);
+            border-radius: 15px;
+            margin: 20px 0;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        .loading-container.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+        .blinking-emoji {
+            font-size: 48px;
+            display: inline-block;
+            animation: blink 1s infinite;
+        }
+        .loading-text {
+            font-size: 20px;
+            color: #00ff41;
+            margin-top: 10px;
+            font-weight: bold;
+            text-shadow: 0 0 10px rgba(0,255,65,0.3);
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.2; transform: scale(0.8); }
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .chat-container {
+            background: rgba(255,255,255,0.95);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            height: 600px;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            margin-bottom: 15px;
+            background: #f8f9ff;
+            border-radius: 10px;
+            min-height: 400px;
+            max-height: 450px;
+        }
+        .chat-message {
+            margin-bottom: 15px;
+            padding: 12px 16px;
+            border-radius: 12px;
+            max-width: 80%;
+            animation: fadeIn 0.3s;
+        }
+        .chat-message.user {
+            background: #667eea;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 4px;
+        }
+        .chat-message.ai {
+            background: white;
+            color: #333;
+            margin-right: auto;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .chat-message .time {
+            font-size: 11px;
+            opacity: 0.7;
+            margin-top: 5px;
+            display: block;
+        }
+        .chat-message.user .time { color: rgba(255,255,255,0.8); }
+        .chat-message.ai .time { color: #999; }
+        .chat-input-area {
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 15px;
+            transition: border-color 0.3s;
+        }
+        .chat-input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        .chat-send-btn {
+            padding: 12px 25px;
+            background: linear-gradient(135deg, #00ff41, #00cc33);
+            color: #0a0a0a;
+            border: none;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 0 20px rgba(0,255,65,0.3);
+        }
+        .chat-send-btn:hover { 
+            transform: translateY(-2px); 
+            box-shadow: 0 0 40px rgba(0,255,65,0.5);
+        }
+        .chat-send-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .chat-typing {
+            display: none;
+            padding: 10px;
+            color: #00ff41;
+            font-style: italic;
+            font-size: 16px;
+            text-shadow: 0 0 10px rgba(0,255,65,0.3);
+        }
+        .chat-typing.active { display: block; }
+        .chat-typing .blinking-emoji-small {
+            display: inline-block;
+            animation: blink 0.8s infinite;
+            font-size: 20px;
+        }
+        
         .results-container {
             background: rgba(255,255,255,0.95);
             padding: 25px;
             border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
         .source-section {
             margin-bottom: 25px;
             padding: 20px;
-            border-left: 4px solid #667eea;
+            border-left: 4px solid #00ff41;
             background: #f8f9ff;
             border-radius: 8px;
+            animation: fadeIn 0.5s;
         }
         .source-header {
             display: flex;
@@ -249,7 +528,8 @@ MAIN_TEMPLATE = '''
             margin-bottom: 15px;
             font-size: 20px;
             font-weight: bold;
-            color: #667eea;
+            color: #00ff41;
+            text-shadow: 0 0 10px rgba(0,255,65,0.3);
         }
         .source-icon { font-size: 24px; }
         .result-item {
@@ -257,16 +537,19 @@ MAIN_TEMPLATE = '''
             padding: 15px;
             background: white;
             border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            animation: fadeIn 0.5s;
         }
-        .result-title { font-weight: bold; color: #333; margin-bottom: 8px; }
+        .result-title { font-weight: bold; color: #333; margin-bottom: 8px; font-size: 16px; }
         .result-summary { color: #666; line-height: 1.6; }
         .result-link {
-            color: #667eea;
+            color: #00cc33;
             text-decoration: none;
             font-size: 14px;
             margin-top: 8px;
             display: inline-block;
         }
+        .result-link:hover { text-decoration: underline; color: #00ff41; }
         .flash-messages { margin-bottom: 20px; }
         .flash {
             padding: 12px;
@@ -280,6 +563,11 @@ MAIN_TEMPLATE = '''
             padding: 20px;
             background: rgba(255,255,255,0.95);
             border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        .history-section h2 {
+            color: #00ff41;
+            text-shadow: 0 0 10px rgba(0,255,65,0.3);
         }
         .history-item {
             padding: 12px;
@@ -287,10 +575,20 @@ MAIN_TEMPLATE = '''
             background: #f8f9ff;
             border-radius: 8px;
             cursor: pointer;
+            transition: background 0.3s;
         }
         .history-item:hover { background: #e8eaff; }
+        .history-item strong { color: #333; }
+        .history-item small { color: #999; }
+        
         @media (max-width: 600px) {
             .header { flex-direction: column; gap: 15px; }
+            .search-mode { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 5px; }
+            .mode-btn { min-width: 60px; font-size: 11px; padding: 6px 10px; }
+            .header-buttons { width: 100%; justify-content: center; }
+            .tab-btn { min-width: 80px; font-size: 14px; padding: 10px 15px; }
+            .chat-container { height: 500px; }
+            .chat-message { max-width: 90%; }
         }
     </style>
 </head>
@@ -307,60 +605,189 @@ MAIN_TEMPLATE = '''
         {% endwith %}
         
         <div class="header">
-            <h1>👾 BRICK AI</h1>
+            <h1><span>👾</span> <span class="glow-title">BRICK AI</span></h1>
             <div class="header-buttons">
                 <a href="/settings" class="btn-icon">⚙️ Settings</a>
                 <button onclick="showFeedback()" class="btn-icon">💬 Feedback</button>
             </div>
         </div>
         
-        <div class="search-box">
-            <input type="text" class="search-input" id="searchQuery" placeholder="What would you like to search?" value="{{ query if query else '' }}">
-            <div class="search-mode">
-                <button class="mode-btn active" onclick="setMode('all')">🔍 All</button>
-                <button class="mode-btn" onclick="setMode('google')">🌐 Google</button>
-                <button class="mode-btn" onclick="setMode('bing')">🔎 Bing</button>
-                <button class="mode-btn" onclick="setMode('wiki')">📚 Wikipedia</button>
-                <button class="mode-btn" onclick="setMode('ai')">🤖 AI</button>
-            </div>
-            <button class="search-btn" onclick="performSearch()">🚀 Search Now</button>
+        <!-- Tab Navigation -->
+        <div class="tab-navigation">
+            <button class="tab-btn active" onclick="switchTab('search')">🔍 Search</button>
+            <button class="tab-btn" onclick="switchTab('chat')">💬 Chat</button>
         </div>
         
-        {% if result %}
-        <div class="results-container">
-            {{ result|safe }}
-        </div>
-        {% endif %}
-        
-        {% if history %}
-        <div class="history-section">
-            <h2 style="margin-bottom: 15px; color: #667eea;">📜 Recent Searches</h2>
-            {% for item in history %}
-            <div class="history-item" onclick="loadSearch('{{ item.query }}')">
-                <strong>{{ item.query }}</strong>
-                <br><small style="color: #666;">{{ item.timestamp }}</small>
+        <!-- Search Tab -->
+        <div id="searchTab" class="tab-content active">
+            <div class="search-box">
+                <input type="text" class="search-input" id="searchQuery" placeholder="What would you like to search?" value="{{ query if query else '' }}">
+                <div class="search-mode">
+                    <button class="mode-btn active" onclick="setMode('all')">🔍 All</button>
+                    <button class="mode-btn" onclick="setMode('google')">🌐 Google</button>
+                    <button class="mode-btn" onclick="setMode('bing')">🔎 Bing</button>
+                    <button class="mode-btn" onclick="setMode('wiki')">📚 Wiki</button>
+                    <button class="mode-btn" onclick="setMode('ai')">🤖 AI</button>
+                </div>
+                <button class="search-btn" id="searchBtn" onclick="performSearch()">🚀 Search Now</button>
             </div>
-            {% endfor %}
+            
+            <!-- Loading Indicator for Search -->
+            <div class="loading-container" id="searchLoading">
+                <div class="blinking-emoji">👾</div>
+                <div class="loading-text">BRICK AI is thinking...</div>
+            </div>
+            
+            {% if result %}
+            <div class="results-container">
+                {{ result|safe }}
+            </div>
+            {% endif %}
+            
+            {% if history %}
+            <div class="history-section">
+                <h2 style="margin-bottom: 15px;">📜 Recent Searches</h2>
+                {% for item in history %}
+                <div class="history-item" onclick="loadSearch('{{ item.query }}')">
+                    <strong>{{ item.query }}</strong>
+                    <br><small>{{ item.timestamp }}</small>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
-        {% endif %}
+        
+        <!-- Chat Tab -->
+        <div id="chatTab" class="tab-content">
+            <div class="chat-container">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="chat-message ai">
+                        <strong>👾 BRICK AI</strong>
+                        <p>Hello! I'm BRICK AI, your friendly assistant. Ask me anything! 😊</p>
+                        <span class="time">Just now</span>
+                    </div>
+                </div>
+                <div class="chat-typing" id="chatTyping">
+                    <span class="blinking-emoji-small">👾</span> BRICK AI is thinking...
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" class="chat-input" id="chatInput" placeholder="Type your message..." onkeypress="if(event.key==='Enter') sendMessage()">
+                    <button class="chat-send-btn" id="chatSendBtn" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
     </div>
     
     <script>
         let currentMode = 'all';
+        
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            
+            if (tab === 'search') {
+                document.getElementById('searchTab').classList.add('active');
+            } else {
+                document.getElementById('chatTab').classList.add('active');
+            }
+            event.target.classList.add('active');
+        }
+        
+        // Search functions
         function setMode(mode) {
             currentMode = mode;
             document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
             event.target.classList.add('active');
         }
+        
         function performSearch() {
             const query = document.getElementById('searchQuery').value;
             if (!query.trim()) { alert('Please enter a search query'); return; }
-            window.location.href = '/search?query=' + encodeURIComponent(query) + '&mode=' + currentMode;
+            
+            // Show loading
+            const loading = document.getElementById('searchLoading');
+            const results = document.querySelector('.results-container');
+            const searchBtn = document.getElementById('searchBtn');
+            
+            loading.classList.add('active');
+            searchBtn.disabled = true;
+            searchBtn.textContent = '⏳ Searching...';
+            if (results) results.style.display = 'none';
+            
+            // Redirect with loading state
+            setTimeout(() => {
+                window.location.href = '/search?query=' + encodeURIComponent(query) + '&mode=' + currentMode + '&loading=true';
+            }, 500);
         }
+        
         function loadSearch(query) {
             document.getElementById('searchQuery').value = query;
             performSearch();
         }
+        
+        // Chat functions
+        function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            // Add user message
+            addMessage('user', message);
+            input.value = '';
+            input.disabled = true;
+            document.getElementById('chatSendBtn').disabled = true;
+            
+            // Show typing indicator with blinking emoji
+            document.getElementById('chatTyping').classList.add('active');
+            
+            // Scroll to bottom
+            const container = document.getElementById('chatMessages');
+            container.scrollTop = container.scrollHeight;
+            
+            // Send to server
+            fetch('/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: message})
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('chatTyping').classList.remove('active');
+                input.disabled = false;
+                document.getElementById('chatSendBtn').disabled = false;
+                input.focus();
+                if (data.response) {
+                    addMessage('ai', data.response);
+                } else {
+                    addMessage('ai', 'Sorry, I had trouble responding. Please try again.');
+                }
+            })
+            .catch(error => {
+                document.getElementById('chatTyping').classList.remove('active');
+                input.disabled = false;
+                document.getElementById('chatSendBtn').disabled = false;
+                input.focus();
+                addMessage('ai', 'Sorry, there was an error. Please try again.');
+            });
+        }
+        
+        function addMessage(type, text) {
+            const container = document.getElementById('chatMessages');
+            const time = new Date().toLocaleTimeString();
+            const div = document.createElement('div');
+            div.className = 'chat-message ' + type;
+            
+            if (type === 'ai') {
+                div.innerHTML = '<strong>👾 BRICK AI</strong><p>' + text.replace(/\n/g, '<br>') + '</p><span class="time">' + time + '</span>';
+            } else {
+                div.innerHTML = '<p>' + text.replace(/\n/g, '<br>') + '</p><span class="time">' + time + '</span>';
+            }
+            
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+        
         function showFeedback() {
             const feedback = prompt('We value your feedback! Please share your thoughts:');
             if (feedback) {
@@ -373,9 +800,28 @@ MAIN_TEMPLATE = '''
                 });
             }
         }
+        
+        // Enter key for chat
+        document.getElementById('chatInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') sendMessage();
+        });
+        
+        // Enter key for search
         document.getElementById('searchQuery').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') performSearch();
         });
+        
+        // Check if loading from URL parameter
+        window.onload = function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('loading') === 'true') {
+                const loading = document.getElementById('searchLoading');
+                loading.classList.add('active');
+                const searchBtn = document.getElementById('searchBtn');
+                searchBtn.disabled = true;
+                searchBtn.textContent = '⏳ Searching...';
+            }
+        };
     </script>
 </body>
 </html>
@@ -387,12 +833,12 @@ SETTINGS_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings - BRICK AI</title>
+    <title>Settings - BRICK AI 👾</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #1e3c72 0%, #2a5298 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
+            background: {% if session.get('theme') == 'dark' %}linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%){% else %}linear-gradient(135deg, #667eea 0%, #764ba2 100%){% endif %};
             min-height: 100vh;
             padding: 20px;
         }
@@ -401,8 +847,33 @@ SETTINGS_TEMPLATE = '''
             background: rgba(255,255,255,0.95);
             padding: 30px;
             border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
-        h1 { color: #667eea; text-align: center; margin-bottom: 25px; }
+        h1 { 
+            text-align: center; 
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .glow-title {
+            color: #00ff41;
+            text-shadow: 
+                0 0 5px #00ff41,
+                0 0 10px #00ff41,
+                0 0 20px #00ff41,
+                0 0 40px #00ff41;
+            animation: glowPulse 2s ease-in-out infinite;
+        }
+        @keyframes glowPulse {
+            0%, 100% {
+                text-shadow: 0 0 5px #00ff41, 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff41;
+            }
+            50% {
+                text-shadow: 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff41, 0 0 80px #00ff41;
+            }
+        }
         .setting-item {
             margin-bottom: 25px;
             padding-bottom: 20px;
@@ -419,8 +890,10 @@ SETTINGS_TEMPLATE = '''
             border-radius: 10px;
             cursor: pointer;
             font-size: 16px;
+            transition: all 0.3s;
         }
-        .theme-btn.active { border-color: #667eea; background: #f8f9ff; }
+        .theme-btn.active { border-color: #00ff41; background: #f0fff4; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
+        .theme-btn:hover { border-color: #00ff41; transform: translateY(-2px); }
         .logout-btn {
             width: 100%;
             padding: 15px;
@@ -434,15 +907,17 @@ SETTINGS_TEMPLATE = '''
             text-decoration: none;
             display: inline-block;
             text-align: center;
+            transition: all 0.3s;
         }
-        .logout-btn:hover { background: #c0392b; }
+        .logout-btn:hover { background: #c0392b; transform: translateY(-2px); }
         .back-btn {
             display: inline-block;
             margin-bottom: 20px;
-            color: #667eea;
+            color: #00cc33;
             text-decoration: none;
             font-weight: bold;
         }
+        .back-btn:hover { text-decoration: underline; color: #00ff41; }
         .user-info {
             background: #f8f9ff;
             padding: 15px;
@@ -473,7 +948,7 @@ SETTINGS_TEMPLATE = '''
         
         <a href="/dashboard" class="back-btn">← Back to Home</a>
         <div class="settings-card">
-            <h1>⚙️ Settings</h1>
+            <h1>⚙️ <span class="glow-title">BRICK AI</span> Settings</h1>
             <div class="user-info">
                 <strong>👤 Logged in as:</strong> {{ session.get('username') }}<br>
                 <strong>📧 Email:</strong> {{ session.get('user_email', 'N/A') }}
@@ -515,7 +990,7 @@ LOGIN_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - BRICK AI</title>
+    <title>Login - BRICK AI 👾</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -533,8 +1008,33 @@ LOGIN_TEMPLATE = '''
             border-radius: 15px;
             width: 100%;
             max-width: 400px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
-        h1 { color: #667eea; text-align: center; margin-bottom: 10px; }
+        h1 { 
+            text-align: center; 
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .glow-title {
+            color: #00ff41;
+            text-shadow: 
+                0 0 5px #00ff41,
+                0 0 10px #00ff41,
+                0 0 20px #00ff41,
+                0 0 40px #00ff41;
+            animation: glowPulse 2s ease-in-out infinite;
+        }
+        @keyframes glowPulse {
+            0%, 100% {
+                text-shadow: 0 0 5px #00ff41, 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff41;
+            }
+            50% {
+                text-shadow: 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff41, 0 0 80px #00ff41;
+            }
+        }
         .subtitle { text-align: center; color: #666; margin-bottom: 30px; }
         .input-group { margin-bottom: 20px; }
         label { display: block; margin-bottom: 8px; color: #333; font-weight: 500; }
@@ -544,20 +1044,23 @@ LOGIN_TEMPLATE = '''
             border: 2px solid #e0e0e0;
             border-radius: 8px;
             font-size: 16px;
+            transition: border-color 0.3s;
         }
-        input:focus { outline: none; border-color: #667eea; }
+        input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
         .btn {
             width: 100%;
             padding: 14px;
-            background: #667eea;
-            color: white;
+            background: linear-gradient(135deg, #00ff41, #00cc33);
+            color: #0a0a0a;
             border: none;
             border-radius: 8px;
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 0 20px rgba(0,255,65,0.3);
         }
-        .btn:hover { background: #5a6fd6; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 0 40px rgba(0,255,65,0.5); }
         .flash {
             padding: 12px;
             border-radius: 8px;
@@ -567,12 +1070,13 @@ LOGIN_TEMPLATE = '''
         .flash.error { background: #fee; color: #c00; border: 1px solid #fcc; }
         .flash.success { background: #efe; color: #080; border: 1px solid #cfc; }
         .links { text-align: center; margin-top: 20px; }
-        .links a { color: #667eea; text-decoration: none; }
+        .links a { color: #00cc33; text-decoration: none; font-weight: bold; }
+        .links a:hover { text-decoration: underline; color: #00ff41; }
     </style>
 </head>
 <body>
     <div class="login-box">
-        <h1>👾 BRICK AI</h1>
+        <h1>👾 <span class="glow-title">BRICK AI</span></h1>
         <p class="subtitle">Your AI-Powered Search Companion</p>
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% for category, message in messages %}
@@ -602,7 +1106,7 @@ REGISTER_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Register - BRICK AI</title>
+    <title>Register - BRICK AI 👾</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -620,8 +1124,33 @@ REGISTER_TEMPLATE = '''
             border-radius: 15px;
             width: 100%;
             max-width: 400px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
         }
-        h1 { color: #667eea; text-align: center; margin-bottom: 10px; }
+        h1 { 
+            text-align: center; 
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .glow-title {
+            color: #00ff41;
+            text-shadow: 
+                0 0 5px #00ff41,
+                0 0 10px #00ff41,
+                0 0 20px #00ff41,
+                0 0 40px #00ff41;
+            animation: glowPulse 2s ease-in-out infinite;
+        }
+        @keyframes glowPulse {
+            0%, 100% {
+                text-shadow: 0 0 5px #00ff41, 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff41;
+            }
+            50% {
+                text-shadow: 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff41, 0 0 80px #00ff41;
+            }
+        }
         .subtitle { text-align: center; color: #666; margin-bottom: 30px; }
         .input-group { margin-bottom: 20px; }
         label { display: block; margin-bottom: 8px; color: #333; font-weight: 500; }
@@ -631,20 +1160,23 @@ REGISTER_TEMPLATE = '''
             border: 2px solid #e0e0e0;
             border-radius: 8px;
             font-size: 16px;
+            transition: border-color 0.3s;
         }
-        input:focus { outline: none; border-color: #667eea; }
+        input:focus { outline: none; border-color: #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.3); }
         .btn {
             width: 100%;
             padding: 14px;
-            background: #667eea;
-            color: white;
+            background: linear-gradient(135deg, #00ff41, #00cc33);
+            color: #0a0a0a;
             border: none;
             border-radius: 8px;
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 0 20px rgba(0,255,65,0.3);
         }
-        .btn:hover { background: #5a6fd6; }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 0 40px rgba(0,255,65,0.5); }
         .flash {
             padding: 12px;
             border-radius: 8px;
@@ -654,13 +1186,14 @@ REGISTER_TEMPLATE = '''
         .flash.error { background: #fee; color: #c00; border: 1px solid #fcc; }
         .flash.success { background: #efe; color: #080; border: 1px solid #cfc; }
         .links { text-align: center; margin-top: 20px; }
-        .links a { color: #667eea; text-decoration: none; }
+        .links a { color: #00cc33; text-decoration: none; font-weight: bold; }
+        .links a:hover { text-decoration: underline; color: #00ff41; }
     </style>
 </head>
 <body>
     <div class="register-box">
-        <h1>👾 Create Account</h1>
-        <p class="subtitle">Join BRICK AI Today</p>
+        <h1>👾 <span class="glow-title">BRICK AI</span></h1>
+        <p class="subtitle">Create Your Account</p>
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% for category, message in messages %}
                 <div class="flash {{ category }}">{{ message }}</div>
@@ -733,7 +1266,6 @@ def register():
         conn = get_db()
         c = conn.cursor()
         
-        # Check if user exists
         existing = c.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
         if existing:
             conn.close()
@@ -792,6 +1324,7 @@ def search():
     
     query = request.args.get('query', '')
     mode = request.args.get('mode', 'all')
+    loading = request.args.get('loading', 'false')
     
     if not query:
         flash('Please enter a search query.', 'error')
@@ -801,64 +1334,103 @@ def search():
     
     # Google Search
     if mode in ['all', 'google']:
-        google_results = search_google(query)
-        if google_results:
-            html_parts.append('<div class="source-section">')
-            html_parts.append('<div class="source-header"><span class="source-icon">🌐</span> Google</div>')
-            for i, url in enumerate(google_results[:3], 1):
-                summary = summarize_content(url)
+        try:
+            google_results = search_google(query)
+            if google_results:
+                html_parts.append('<div class="source-section">')
+                html_parts.append('<div class="source-header"><span class="source-icon">🌐</span> Google Search</div>')
+                for i, url in enumerate(google_results[:5], 1):
+                    html_parts.append(f'''
+                    <div class="result-item">
+                        <div class="result-title">Result {i}</div>
+                        <div class="result-summary">Click the link below to visit the page</div>
+                        <a href="{url}" target="_blank" class="result-link">🔗 {url[:80]}...</a>
+                    </div>
+                    ''')
+                html_parts.append('</div>')
+            else:
                 html_parts.append(f'''
-                <div class="result-item">
-                    <div class="result-title">Result {i}</div>
-                    <div class="result-summary">{summary}</div>
-                    <a href="{url}" target="_blank" class="result-link">→ View</a>
+                <div class="source-section">
+                    <div class="source-header"><span class="source-icon">🌐</span> Google Search</div>
+                    <div class="result-item">No Google results found for "{query}". Try a different search.</div>
                 </div>
                 ''')
-            html_parts.append('</div>')
+        except Exception as e:
+            html_parts.append(f'''
+            <div class="source-section">
+                <div class="source-header"><span class="source-icon">🌐</span> Google Search</div>
+                <div class="result-item">Google search error: {str(e)}</div>
+            </div>
+            ''')
     
     # Bing Search
     if mode in ['all', 'bing']:
-        bing_results = search_bing(query)
-        if bing_results:
-            html_parts.append('<div class="source-section">')
-            html_parts.append('<div class="source-header"><span class="source-icon">🔎</span> Bing</div>')
-            for i, url in enumerate(bing_results[:3], 1):
-                summary = summarize_content(url)
-                html_parts.append(f'''
-                <div class="result-item">
-                    <div class="result-title">Result {i}</div>
-                    <div class="result-summary">{summary}</div>
-                    <a href="{url}" target="_blank" class="result-link">→ View</a>
-                </div>
-                ''')
-            html_parts.append('</div>')
+        try:
+            bing_results = search_bing(query)
+            if bing_results:
+                html_parts.append('<div class="source-section">')
+                html_parts.append('<div class="source-header"><span class="source-icon">🔎</span> Bing Search</div>')
+                for i, url in enumerate(bing_results[:3], 1):
+                    html_parts.append(f'''
+                    <div class="result-item">
+                        <div class="result-title">Result {i}</div>
+                        <div class="result-summary">Click the link below to visit the page</div>
+                        <a href="{url}" target="_blank" class="result-link">🔗 {url[:80]}...</a>
+                    </div>
+                    ''')
+                html_parts.append('</div>')
+        except Exception as e:
+            pass
     
-    # Wikipedia
+    # Wikipedia Search
     if mode in ['all', 'wiki']:
-        wiki_results = search_wikipedia(query)
-        if wiki_results:
-            html_parts.append('<div class="source-section">')
-            html_parts.append('<div class="source-header"><span class="source-icon">📚</span> Wikipedia</div>')
-            for item in wiki_results:
+        try:
+            wiki_results = search_wikipedia(query)
+            if wiki_results:
+                html_parts.append('<div class="source-section">')
+                html_parts.append('<div class="source-header"><span class="source-icon">📚</span> Wikipedia</div>')
+                for item in wiki_results:
+                    html_parts.append(f'''
+                    <div class="result-item">
+                        <div class="result-title">{item['title']}</div>
+                        <div class="result-summary">{item['summary']}</div>
+                        <a href="{item['url']}" target="_blank" class="result-link">📖 Read More on Wikipedia</a>
+                    </div>
+                    ''')
+                html_parts.append('</div>')
+            else:
                 html_parts.append(f'''
-                <div class="result-item">
-                    <div class="result-title">{item['title']}</div>
-                    <div class="result-summary">{item['summary']}</div>
-                    <a href="{item['url']}" target="_blank" class="result-link">→ Read More</a>
+                <div class="source-section">
+                    <div class="source-header"><span class="source-icon">📚</span> Wikipedia</div>
+                    <div class="result-item">No Wikipedia articles found for "{query}". Try a different search.</div>
                 </div>
                 ''')
-            html_parts.append('</div>')
+        except Exception as e:
+            html_parts.append(f'''
+            <div class="source-section">
+                <div class="source-header"><span class="source-icon">📚</span> Wikipedia</div>
+                <div class="result-item">Wikipedia search error: {str(e)}</div>
+            </div>
+            ''')
     
     # AI Search
     if mode in ['all', 'ai']:
-        ai_result = smart_search(query)
-        if ai_result and ai_result != "AI search unavailable":
-            html_parts.append('<div class="source-section">')
-            html_parts.append('<div class="source-header"><span class="source-icon">🤖</span> AI Smart Summary</div>')
-            html_parts.append(f'<div class="result-item"><div class="result-summary">{ai_result}</div></div>')
-            html_parts.append('</div>')
+        try:
+            ai_result = smart_search(query)
+            if ai_result:
+                html_parts.append('<div class="source-section">')
+                html_parts.append('<div class="source-header"><span class="source-icon">🤖</span> AI Smart Summary</div>')
+                html_parts.append(f'<div class="result-item"><div class="result-summary">{ai_result}</div></div>')
+                html_parts.append('</div>')
+        except Exception as e:
+            html_parts.append(f'''
+            <div class="source-section">
+                <div class="source-header"><span class="source-icon">🤖</span> AI Smart Summary</div>
+                <div class="result-item">AI search error: {str(e)}</div>
+            </div>
+            ''')
     
-    result_html = ''.join(html_parts) if html_parts else '<p>No results found.</p>'
+    result_html = ''.join(html_parts) if html_parts else f'<p>No results found for "{query}". Try a different search term.</p>'
     
     # Save to history
     conn = get_db()
@@ -874,7 +1446,30 @@ def search():
                        (session['user_id'],)).fetchall()
     conn.close()
     
-    return render_template_string(MAIN_TEMPLATE, result=result_html, query=query, history=history)
+    return render_template_string(MAIN_TEMPLATE, result=result_html, query=query, history=history, loading=loading)
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    data = request.get_json()
+    message = data.get('message', '')
+    
+    if not message:
+        return jsonify({'error': 'No message provided'}), 400
+    
+    response = chat_with_ai(message)
+    
+    # Save chat to database
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('INSERT INTO chat_messages (user_id, message, response) VALUES (?, ?, ?)',
+             (session['user_id'], message, response))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({'response': response})
 
 @app.route('/settings')
 def settings():

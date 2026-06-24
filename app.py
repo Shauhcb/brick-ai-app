@@ -23,7 +23,6 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
     
-    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
@@ -33,7 +32,6 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )''')
     
-    # Search history table
     c.execute('''CREATE TABLE IF NOT EXISTS search_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -44,7 +42,6 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
     
-    # Feedback table
     c.execute('''CREATE TABLE IF NOT EXISTS feedback (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -54,23 +51,12 @@ def init_db():
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
     
-    # Chat messages table
     c.execute('''CREATE TABLE IF NOT EXISTS chat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         message TEXT NOT NULL,
         response TEXT NOT NULL,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-    )''')
-    
-    # Settings table
-    c.execute('''CREATE TABLE IF NOT EXISTS user_settings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL UNIQUE,
-        auto_save_chats BOOLEAN DEFAULT 1,
-        show_timestamps BOOLEAN DEFAULT 1,
-        search_suggestions BOOLEAN DEFAULT 1,
         FOREIGN KEY (user_id) REFERENCES users (id)
     )''')
     
@@ -111,59 +97,42 @@ def get_ai_response(prompt):
             print(f"Gemini error: {e}")
     
     # Simple fallback responses
-    return get_simple_response(prompt)
-
-def get_simple_response(prompt):
-    """Simple rule-based responses when AI is unavailable"""
     prompt_lower = prompt.lower()
     
-    greetings = ['hello', 'hi', 'hey', 'howdy', 'greetings', 'sup']
-    if any(word in prompt_lower for word in greetings):
+    if any(word in prompt_lower for word in ['hello', 'hi', 'hey', 'howdy']):
         return "Hello there! 👋 I'm BRICK AI. How can I help you today?"
     
     if 'how are you' in prompt_lower:
-        return "I'm doing great! 😊 Thanks for asking. What can I assist you with?"
+        return "I'm doing great! 😊 Thanks for asking!"
     
     if 'help' in prompt_lower:
-        return "I can help you with:\n• Answering questions\n• Searching the web\n• Chatting about various topics\n• Providing information\n\nWhat would you like to know?"
-    
-    if 'thank' in prompt_lower:
-        return "You're welcome! 😊 Is there anything else I can help with?"
-    
-    if 'bye' in prompt_lower or 'goodbye' in prompt_lower:
-        return "Goodbye! 👋 Feel free to come back anytime. Have a great day!"
-    
-    if 'weather' in prompt_lower:
-        return "I don't have access to real-time weather data, but I recommend checking weather.com or your favorite weather app! 🌤️"
-    
-    if 'time' in prompt_lower:
-        now = datetime.now()
-        return f"The current time is {now.strftime('%I:%M %p')} on {now.strftime('%B %d, %Y')} 📅"
+        return "I can help you with answering questions, searching the web, or just chatting!"
     
     if 'summer' in prompt_lower:
         now = datetime.now()
         month = now.month
         if month in [6, 7, 8]:
-            return "Yes! It is currently summer in the Northern Hemisphere. ☀️ Enjoy the warm weather!"
+            return "Yes! It is currently summer in the Northern Hemisphere. ☀️"
         elif month in [12, 1, 2]:
-            return "No, it's currently winter in the Northern Hemisphere. ❄️ It's summer in the Southern Hemisphere though!"
+            return "No, it's currently winter in the Northern Hemisphere. ❄️"
         else:
             return "It's currently spring or autumn. Summer is coming soon! 🌸"
     
-    # Default response - more helpful
+    if 'time' in prompt_lower:
+        now = datetime.now()
+        return f"The current time is {now.strftime('%I:%M %p')} 📅"
+    
+    if 'bye' in prompt_lower:
+        return "Goodbye! 👋 Have a great day!"
+    
     return f"""🤖 BRICK AI here!
 
 I understand you're asking about: "{prompt}"
 
-I'm here to help! You can:
-• Ask me questions
-• Use the Search tab for web results
-• Chat with me about anything
+How can I help you today?"""
 
-What else would you like to know?"""
-
-# Search Functions - Using DuckDuckGo API for real results
-def search_duckduckgo(query):
+# Search Functions
+def search_web(query):
     """Search using DuckDuckGo API"""
     try:
         encoded_query = urllib.parse.quote_plus(query)
@@ -174,7 +143,7 @@ def search_duckduckgo(query):
             data = response.json()
             results = []
             
-            # Get Abstract text
+            # Get Abstract
             if data.get('AbstractText'):
                 results.append({
                     'title': data.get('Heading', query),
@@ -187,12 +156,9 @@ def search_duckduckgo(query):
                 for topic in data['RelatedTopics'][:5]:
                     if 'Text' in topic:
                         text = topic['Text']
-                        # Clean up text
                         text = re.sub(r'<[^>]+>', '', text)
-                        # Extract URL
                         url_match = re.search(r'https?://[^\s]+', text)
                         url = url_match.group(0) if url_match else ''
-                        # Clean text from URL
                         text = re.sub(r'https?://[^\s]+', '', text).strip()
                         if text and len(text) > 10:
                             results.append({
@@ -201,18 +167,13 @@ def search_duckduckgo(query):
                                 'url': url
                             })
             
-            # If no results, return some example links
+            # If no results, return search links
             if not results:
                 results = [
                     {
                         'title': f'Search "{query}" on Google',
-                        'summary': f'Click to search for "{query}" on Google',
+                        'summary': f'Click to search for "{query}"',
                         'url': f'https://www.google.com/search?q={encoded_query}'
-                    },
-                    {
-                        'title': f'Search "{query}" on Wikipedia',
-                        'summary': f'Click to search for "{query}" on Wikipedia',
-                        'url': f'https://en.wikipedia.org/wiki/{query.replace(" ", "_")}'
                     }
                 ]
             
@@ -223,7 +184,7 @@ def search_duckduckgo(query):
         return []
 
 def search_wikipedia(query):
-    """Search Wikipedia using the official API"""
+    """Search Wikipedia"""
     try:
         encoded_query = urllib.parse.quote_plus(query)
         url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded_query}&format=json&srlimit=3"
@@ -236,7 +197,6 @@ def search_wikipedia(query):
             for item in data.get('query', {}).get('search', [])[:3]:
                 title = item.get('title')
                 if title:
-                    # Get summary
                     summary_url = f"https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles={urllib.parse.quote_plus(title)}&format=json"
                     summary_response = requests.get(summary_url, timeout=10)
                     summary = ''
@@ -261,7 +221,7 @@ def search_wikipedia(query):
             return results
         return []
     except Exception as e:
-        print(f"Wikipedia search error: {e}")
+        print(f"Wikipedia error: {e}")
         return []
 
 # Templates
@@ -573,14 +533,21 @@ MAIN_TEMPLATE = '''
             animation: blink 0.8s infinite;
         }
         @keyframes blink {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.2; transform: scale(0.8); }
+            0%, 100% { opacity: 1; transform: scale(1) rotate(0deg); }
+            25% { transform: scale(1.1) rotate(-5deg); }
+            50% { opacity: 0.2; transform: scale(0.8) rotate(0deg); }
+            75% { transform: scale(1.1) rotate(5deg); }
         }
         .loading-text {
             font-size: 22px;
             color: #667eea;
             margin-top: 15px;
             font-weight: bold;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
         
         .chat-container {
@@ -600,9 +567,7 @@ MAIN_TEMPLATE = '''
             padding-bottom: 10px;
             border-bottom: 1px solid #e0e0e0;
         }
-        .chat-header h3 {
-            color: #667eea;
-        }
+        .chat-header h3 { color: #667eea; }
         .chat-header .clear-chat {
             background: #e74c3c;
             color: white;
@@ -621,15 +586,21 @@ MAIN_TEMPLATE = '''
             background: #f8f9ff;
             border-radius: 10px;
             min-height: 400px;
+            max-height: 450px;
         }
         .chat-message {
             margin-bottom: 15px;
             padding: 12px 16px;
             border-radius: 12px;
             max-width: 80%;
+            animation: fadeIn 0.3s;
         }
-        .chat-message.user { background: #667eea; color: white; margin-left: auto; }
-        .chat-message.ai { background: white; color: #333; margin-right: auto; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .chat-message.user { background: #667eea; color: white; margin-left: auto; border-bottom-right-radius: 4px; }
+        .chat-message.ai { background: white; color: #333; margin-right: auto; border-bottom-left-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
         .chat-message .time { font-size: 11px; opacity: 0.7; margin-top: 5px; display: block; }
         .chat-message.user .time { color: rgba(255,255,255,0.8); }
         .chat-message.ai .time { color: #999; }
@@ -681,6 +652,7 @@ MAIN_TEMPLATE = '''
             border-left: 4px solid #667eea;
             background: #f8f9ff;
             border-radius: 8px;
+            animation: fadeIn 0.5s;
         }
         .source-header {
             display: flex;
@@ -697,6 +669,7 @@ MAIN_TEMPLATE = '''
             background: white;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            animation: fadeIn 0.5s;
         }
         .result-title { font-weight: bold; color: #333; margin-bottom: 8px; }
         .result-summary { color: #666; line-height: 1.6; }
@@ -722,8 +695,9 @@ MAIN_TEMPLATE = '''
             background: #f8f9ff;
             border-radius: 8px;
             cursor: pointer;
+            transition: all 0.3s;
         }
-        .history-item:hover { background: #e8eaff; }
+        .history-item:hover { background: #e8eaff; transform: translateX(5px); }
         @media (max-width: 600px) {
             .header { flex-direction: column; gap: 15px; }
             .header-buttons { width: 100%; justify-content: center; }
@@ -814,30 +788,28 @@ MAIN_TEMPLATE = '''
     
     <script>
         let currentMode = 'all';
-        let chatHistory = [];
         
-        // Load chat history from server
+        // Load chat history
         function loadChatHistory() {
             fetch('/get-chat-history')
                 .then(response => response.json())
                 .then(data => {
-                    if (data.history) {
-                        chatHistory = data.history;
-                        const container = document.getElementById('chatMessages');
-                        container.innerHTML = '';
-                        if (chatHistory.length === 0) {
-                            addMessage('ai', 'Hello! I\'m BRICK AI, your friendly assistant. Ask me anything! 😊');
-                        } else {
-                            chatHistory.forEach(msg => {
-                                addMessage('user', msg.message);
-                                addMessage('ai', msg.response);
-                            });
-                        }
+                    const container = document.getElementById('chatMessages');
+                    container.innerHTML = '';
+                    if (data.history && data.history.length > 0) {
+                        data.history.forEach(msg => {
+                            addMessage('user', msg.message);
+                            addMessage('ai', msg.response);
+                        });
+                    } else {
+                        addMessage('ai', 'Hello! I\'m BRICK AI, your friendly assistant. Ask me anything! 😊');
                     }
+                })
+                .catch(() => {
+                    addMessage('ai', 'Hello! I\'m BRICK AI, your friendly assistant. Ask me anything! 😊');
                 });
         }
         
-        // Tab switching
         function switchTab(tab) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -845,7 +817,6 @@ MAIN_TEMPLATE = '''
                 document.getElementById('searchTab').classList.add('active');
             } else {
                 document.getElementById('chatTab').classList.add('active');
-                // Load chat history when switching to chat tab
                 loadChatHistory();
             }
             event.target.classList.add('active');
@@ -958,7 +929,6 @@ MAIN_TEMPLATE = '''
             if (e.key === 'Enter') performSearch();
         });
         
-        // Load chat history on page load
         window.onload = function() {
             loadChatHistory();
             const urlParams = new URLSearchParams(window.location.search);
@@ -1003,7 +973,6 @@ SETTINGS_TEMPLATE = '''
         }
         .setting-item:last-child { border-bottom: none; }
         .setting-label { font-weight: bold; color: #333; margin-bottom: 10px; display: block; font-size: 16px; }
-        .setting-desc { color: #666; font-size: 13px; margin-top: 5px; }
         .theme-options { display: flex; gap: 15px; }
         .theme-btn {
             flex: 1;
@@ -1344,11 +1313,11 @@ def search():
     
     html_parts = []
     
-    # Google/Bing Search (using DuckDuckGo)
+    # Web Search (Google/Bing/All)
     if mode in ['all', 'google', 'bing']:
-        results = search_duckduckgo(query)
+        results = search_web(query)
         if results:
-            source_name = 'Google' if mode == 'google' else 'Bing' if mode == 'bing' else 'Search'
+            source_name = 'Google' if mode == 'google' else 'Bing' if mode == 'bing' else 'Web'
             icon = '🌐' if mode == 'google' else '🔎' if mode == 'bing' else '🔍'
             html_parts.append('<div class="source-section">')
             html_parts.append(f'<div class="source-header"><span class="source-icon">{icon}</span> {source_name} Results</div>')
@@ -1356,16 +1325,17 @@ def search():
                 title = item.get('title', 'Result')
                 summary = item.get('summary', '')
                 url = item.get('url', '#')
-                html_parts.append(f'''
-                <div class="result-item">
-                    <div class="result-title">{title}</div>
-                    <div class="result-summary">{summary}</div>
-                    <a href="{url}" target="_blank" class="result-link">🔗 Visit Link</a>
-                </div>
-                ''')
+                if url:
+                    html_parts.append(f'''
+                    <div class="result-item">
+                        <div class="result-title">{title}</div>
+                        <div class="result-summary">{summary[:200]}</div>
+                        <a href="{url}" target="_blank" class="result-link">🔗 Visit Link</a>
+                    </div>
+                    ''')
             html_parts.append('</div>')
         else:
-            source_name = 'Google' if mode == 'google' else 'Bing' if mode == 'bing' else 'Search'
+            source_name = 'Google' if mode == 'google' else 'Bing' if mode == 'bing' else 'Web'
             icon = '🌐' if mode == 'google' else '🔎' if mode == 'bing' else '🔍'
             html_parts.append(f'''
             <div class="source-section">
@@ -1542,7 +1512,6 @@ def update_setting():
     setting = data.get('setting')
     value = data.get('value')
     
-    # Store in session
     session[setting] = value
     
     return jsonify({'success': True})
@@ -1558,7 +1527,6 @@ def clear_history():
     conn.commit()
     conn.close()
     
-    flash('Search history cleared!', 'success')
     return jsonify({'success': True})
 
 @app.route('/export-data', methods=['GET'])

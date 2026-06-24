@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - BRICK AI 👾</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .box { background: white; padding: 40px; border-radius: 15px; width: 100%; max-width: 400px; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+        h1 { text-align: center; margin-bottom: 10px; font-size: 32px; color: #667eea; }
+        .subtitle { text-align: center; color: #666; margin-bottom: 30px; }
+        .input-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; color: #333; font-weight: 500; }
+        input { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; }
+        input:focus { outline: none; border-color: #667eea; }
+        .btn { width: 100%; padding: 14px; background: #667eea; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
+        .btn:hover { background: #5a6fd6; }
+        .flash { padding: 12px; border-radius: 8px; margin-bottom: 20px; text-align: center; }
+        .flash.error { background: #fee; color: #c00; }
+        .flash.success { background: #efe; color: #080; }
+        .links { text-align: center; margin-top: 20px; }
+        .links a { color: #667eea; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>👾 BRICK AI</h1>
+        <p class="subtitle">Your AI-Powered Search Companion</p>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="flash {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+        <form method="POST">
+            <div class="input-group">
+                <label>Email</label>
+                <input type="email" name="email" required>
+            </div>
+            <div class="input-group">
+                <label>Password</label>
+                <input type="password" name="password" required>
+            </div>
+            <button type="submit" class="btn">🔐 Login</button>
+        </form>
+        <div class="links">
+            <a href="/register">Create an Account</a>
+        </div>
+    </div>
+</body>
+</html>

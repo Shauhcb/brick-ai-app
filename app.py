@@ -1,47 +1,59 @@
 from flask import Flask, render_template_string, request, redirect, session, flash, jsonify
-from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
+import sqlite3
 import os
 import requests
 from datetime import datetime
+import json
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'brick_ai_super_secret_key_123')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///brick_ai.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db = SQLAlchemy(app)
+# Database helper functions
+def get_db():
+    conn = sqlite3.connect('brick_ai.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# Database Models - Simplified to avoid relationship issues
-class User(db.Model):
-    __tablename__ = 'users'
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), unique=True, nullable=False)
-    email = db.Column(db.String(150), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
-    theme = db.Column(db.String(50), default='light')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+def init_db():
+    conn = get_db()
+    c = conn.cursor()
+    
+    # Create tables
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        theme TEXT DEFAULT 'light',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS search_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        query TEXT NOT NULL,
+        result TEXT,
+        mode TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        message TEXT NOT NULL,
+        rating INTEGER,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id)
+    )''')
+    
+    conn.commit()
+    conn.close()
+    print("✅ Database initialized!")
 
-class SearchHistory(db.Model):
-    __tablename__ = 'search_history'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    query = db.Column(db.String(500))
-    result = db.Column(db.Text)
-    mode = db.Column(db.String(50))
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-class Feedback(db.Model):
-    __tablename__ = 'feedback'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    message = db.Column(db.Text)
-    rating = db.Column(db.Integer)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-# Create tables
-with app.app_context():
-    db.create_all()
+# Initialize database
+init_db()
 
 # Try importing optional packages
 try:
@@ -326,7 +338,7 @@ MAIN_TEMPLATE = '''
             {% for item in history %}
             <div class="history-item" onclick="loadSearch('{{ item.query }}')">
                 <strong>{{ item.query }}</strong>
-                <br><small style="color: #666;">{{ item.timestamp.strftime('%Y-%m-%d %H:%M') }}</small>
+                <br><small style="color: #666;">{{ item.timestamp }}</small>
             </div>
             {% endfor %}
         </div>
@@ -476,7 +488,7 @@ SETTINGS_TEMPLATE = '''
             <div class="setting-item">
                 <span class="setting-label">📊 Stats</span>
                 <p>Total Searches: {{ search_count }}</p>
-                <p>Member Since: {{ user.created_at.strftime('%B %Y') if user else 'N/A' }}</p>
+                <p>Member Since: {{ created_at }}</p>
             </div>
             <div class="setting-item">
                 <span class="setting-label">🔐 Account</span>
@@ -690,13 +702,17 @@ def login():
     if request.method == 'POST':
         email = request.form.get('email')
         password = request.form.get('password')
-        user = User.query.filter_by(email=email).first()
         
-        if user and check_password_hash(user.password_hash, password):
-            session['user_id'] = user.id
-            session['username'] = user.username
-            session['user_email'] = user.email
-            session['theme'] = user.theme if user.theme else 'light'
+        conn = get_db()
+        c = conn.cursor()
+        user = c.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+        conn.close()
+        
+        if user and check_password_hash(user['password_hash'], password):
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            session['user_email'] = user['email']
+            session['theme'] = user['theme'] if user['theme'] else 'light'
             flash('Logged in successfully!', 'success')
             return redirect('/dashboard')
         else:
@@ -714,22 +730,32 @@ def register():
         email = request.form.get('email')
         password = request.form.get('password')
         
-        if User.query.filter_by(email=email).first():
+        conn = get_db()
+        c = conn.cursor()
+        
+        # Check if user exists
+        existing = c.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+        if existing:
+            conn.close()
             flash('Email already registered!', 'error')
             return render_template_string(REGISTER_TEMPLATE)
         
-        if User.query.filter_by(username=username).first():
+        existing = c.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+        if existing:
+            conn.close()
             flash('Username already taken!', 'error')
             return render_template_string(REGISTER_TEMPLATE)
         
         hashed_password = generate_password_hash(password)
-        new_user = User(username=username, email=email, password_hash=hashed_password)
-        db.session.add(new_user)
-        db.session.commit()
+        c.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
+                 (username, email, hashed_password))
+        conn.commit()
+        user_id = c.lastrowid
+        conn.close()
         
-        session['user_id'] = new_user.id
-        session['username'] = new_user.username
-        session['user_email'] = new_user.email
+        session['user_id'] = user_id
+        session['username'] = username
+        session['user_email'] = email
         session['theme'] = 'light'
         
         flash('Account created successfully!', 'success')
@@ -743,14 +769,18 @@ def dashboard():
         flash('Please login first.', 'error')
         return redirect('/login')
     
-    user = User.query.get(session['user_id'])
+    conn = get_db()
+    c = conn.cursor()
+    user = c.execute('SELECT * FROM users WHERE id = ?', (session['user_id'],)).fetchone()
+    
     if not user:
+        conn.close()
         session.clear()
         return redirect('/login')
     
-    history = SearchHistory.query.filter_by(user_id=session['user_id']).order_by(
-        SearchHistory.timestamp.desc()
-    ).limit(10).all()
+    history = c.execute('SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10',
+                       (session['user_id'],)).fetchall()
+    conn.close()
     
     return render_template_string(MAIN_TEMPLATE, result='', query='', history=history)
 
@@ -831,18 +861,18 @@ def search():
     result_html = ''.join(html_parts) if html_parts else '<p>No results found.</p>'
     
     # Save to history
-    new_search = SearchHistory(
-        user_id=session['user_id'],
-        query=query,
-        result=result_html[:500],
-        mode=mode
-    )
-    db.session.add(new_search)
-    db.session.commit()
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('INSERT INTO search_history (user_id, query, result, mode) VALUES (?, ?, ?, ?)',
+             (session['user_id'], query, result_html[:500], mode))
+    conn.commit()
+    conn.close()
     
-    history = SearchHistory.query.filter_by(user_id=session['user_id']).order_by(
-        SearchHistory.timestamp.desc()
-    ).limit(10).all()
+    conn = get_db()
+    c = conn.cursor()
+    history = c.execute('SELECT * FROM search_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10',
+                       (session['user_id'],)).fetchall()
+    conn.close()
     
     return render_template_string(MAIN_TEMPLATE, result=result_html, query=query, history=history)
 
@@ -852,13 +882,18 @@ def settings():
         flash('Please login first.', 'error')
         return redirect('/login')
     
-    user = User.query.get(session['user_id'])
+    conn = get_db()
+    c = conn.cursor()
+    user = c.execute('SELECT * FROM users WHERE id = ?', (session['user_id'],)).fetchone()
+    search_count = c.execute('SELECT COUNT(*) FROM search_history WHERE user_id = ?', (session['user_id'],)).fetchone()[0]
+    conn.close()
+    
     if not user:
         session.clear()
         return redirect('/login')
     
-    search_count = SearchHistory.query.filter_by(user_id=user.id).count()
-    return render_template_string(SETTINGS_TEMPLATE, user=user, search_count=search_count)
+    return render_template_string(SETTINGS_TEMPLATE, user=user, search_count=search_count, 
+                                 created_at=user['created_at'])
 
 @app.route('/set-theme', methods=['POST'])
 def set_theme():
@@ -868,12 +903,13 @@ def set_theme():
     data = request.get_json()
     theme = data.get('theme', 'light')
     
-    user = User.query.get(session['user_id'])
-    if user:
-        user.theme = theme
-        session['theme'] = theme
-        db.session.commit()
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('UPDATE users SET theme = ? WHERE id = ?', (theme, session['user_id']))
+    conn.commit()
+    conn.close()
     
+    session['theme'] = theme
     return jsonify({'success': True})
 
 @app.route('/submit-feedback', methods=['POST'])
@@ -885,9 +921,11 @@ def submit_feedback():
     message = data.get('message', '')
     
     if message:
-        feedback = Feedback(user_id=session['user_id'], message=message)
-        db.session.add(feedback)
-        db.session.commit()
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('INSERT INTO feedback (user_id, message) VALUES (?, ?)', (session['user_id'], message))
+        conn.commit()
+        conn.close()
     
     return jsonify({'success': True})
 
